@@ -42,6 +42,8 @@ std::shared_ptr<Service> make_service(const std::string& name) {
 
 uint32_t Service::handle(IpcCtx& ctx) {
     auto it = cmds.find(ctx.cmd);
+    static const bool trace = std::getenv("NX_TRACE_IPC") != nullptr;
+    if (trace) log("ipc: %s cmd %u", name.c_str(), ctx.cmd);
     if (it != cmds.end()) return it->second(ctx);
     log("ipc: %s cmd %u not implemented (stub ok)", name.c_str(), ctx.cmd);
     return 0;

@@ -1,4 +1,6 @@
 // acc:u0 (accounts) and the storage objects am hands out (launch parameters).
+#include <nx/runtime.h>
+
 #include "ipc.h"
 
 namespace nx {
@@ -104,6 +106,15 @@ void account(Service& s) {
 
 ServiceRegistrar r_acc_u0("acc:u0", [] { auto s = std::make_shared<Service>("acc:u0"); account(*s); return s; });
 ServiceRegistrar r_acc_u1("acc:u1", [] { auto s = std::make_shared<Service>("acc:u1"); account(*s); return s; });
+
+// 1.2.0 closes a user handle it marks open after the title screen without having opened it (its manager pointer,
+// +0x10, is null) and CloseUser dereferences it: skip those, close the rest with the SDK's own CloseUser.
+void CloseUser(CPU& c) {
+    if (!ld<uint64_t>(c.x[0] + 0x10)) return;
+    static const uint64_t sdk_close = find_symbol("_ZN2nn7account9CloseUserERKNS0_10UserHandleE");
+    call(c, sdk_close);
+}
+NX_HLE("_ZN2nn7account9CloseUserERKNS0_10UserHandleE", CloseUser);
 
 }  // namespace
 

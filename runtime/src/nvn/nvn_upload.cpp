@@ -74,10 +74,16 @@ void decode_astc(uint32_t format, std::vector<uint8_t>& linear, std::vector<Line
         at += (l.layer_size * layers + 15) & ~15ull;
     }
     std::vector<uint8_t> rgba(at);
-    for (size_t k = 0; k < levels.size(); k++)
-        if (levels[k].offset + levels[k].layer_size * layers <= linear.size())
+    for (size_t k = 0; k < levels.size(); k++) {
+        // What astc_decode_image reads, which can exceed layer_size when the level's block counts disagree with it.
+        const uint64_t need = uint64_t((levels[k].width + bw - 1) / bw) * ((levels[k].height + bh - 1) / bh) * 16 * layers;
+        if (levels[k].offset + std::max(need, levels[k].layer_size * layers) <= linear.size())
             invalid += astc_decode_image(linear.data() + levels[k].offset, levels[k].width, levels[k].height, layers,
                                          bw, bh, srgb, rgba.data() + out[k].offset);
+        else
+            log("nvn/vk: ASTC level %zu %ux%u x%u: %llu bytes needed, %llu untiled: left black", k, levels[k].width,
+                levels[k].height, layers, (unsigned long long)need, (unsigned long long)(linear.size() - levels[k].offset));
+    }
     linear.swap(rgba);
     levels.swap(out);
     const uint64_t spent = plat::monotonic_ns() - t0;

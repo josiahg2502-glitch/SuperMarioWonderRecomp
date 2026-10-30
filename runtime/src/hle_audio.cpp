@@ -179,8 +179,8 @@ void CreateAudioRendererManagerByHipc(CPU& c) {
 // the frame's commands and runs the sdk's own DSP command processor on the calling thread, and its render system
 // (impl + 0x60) signals its own event, which has no kernel object in process. A guest thread of ours renders every
 // 5 ms and signals the game's event itself, then sends the frame's final mix to the host device.
-constexpr uint64_t kRendererVtable = 0xd04910;     // sdk: vtable of the sf object wrapping AudioRendererImpl
-constexpr uint64_t kExecuteRendering = 0x20cac8;   // sdk: AudioRendererImpl::ExecuteAudioRendererRendering
+constexpr uint64_t kRendererVtable = 0xd05910;     // sdk 1.2.0 (1.0.0: 0xd04910): vtable of the sf object wrapping AudioRendererImpl
+constexpr uint64_t kExecuteRendering = 0x20cc48;   // sdk 1.2.0 (1.0.0: 0x20cac8): AudioRendererImpl::ExecuteAudioRendererRendering
 
 // The in-process render system hands the client a readable handle of 0 for the renderer's event (there is no
 // kernel event behind it), so the SystemEvent the game waits on is ours: an InterProcessEventType keeps its

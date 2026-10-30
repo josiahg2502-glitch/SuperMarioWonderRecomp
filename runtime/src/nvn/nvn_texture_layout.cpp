@@ -16,7 +16,7 @@ namespace nx::nvn {
 
 namespace {
 
-constexpr uint64_t kFormatTable = 0xd34198;  // in sdk (SDK 16.2)
+constexpr uint64_t kFormatTable = 0xd351a8;  // in sdk (game 1.2.0; 0xd34198 in 1.0.0)
 constexpr uint32_t kFormatCount = 0xd0;
 
 struct FormatInfo {

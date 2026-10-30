@@ -59,6 +59,39 @@ ServiceRegistrar r_aoc("aoc:u", [] {
     });
 });
 
+// amiibo (1.2.0 calls nn::nfp::Initialize at boot): an NFC stack with no reader attached.
+uint32_t push_event(IpcCtx& c) {
+    auto e = std::make_shared<KEvent>();
+    e->state = std::make_shared<EventState>();
+    c.out_copy.push_back(handle_add(e));
+    return 0u;
+}
+
+std::shared_ptr<Service> nfc_user(const char* name) {
+    return make(name, [](Service& s) {
+        auto state = std::make_shared<uint32_t>(0);
+        s.cmds[0] = [state](IpcCtx&) { *state = 1; return 0u; };                  // Initialize
+        s.cmds[1] = [state](IpcCtx&) { *state = 0; return 0u; };                  // Finalize
+        s.cmds[2] = [](IpcCtx& c) { c.push<uint32_t>(0); return 0u; };            // ListDevices: none
+        s.cmds[17] = push_event;                                                   // AttachActivateEvent
+        s.cmds[18] = push_event;                                                   // AttachDeactivateEvent
+        s.cmds[19] = [state](IpcCtx& c) { c.push<uint32_t>(*state); return 0u; }; // GetState
+        s.cmds[23] = push_event;                                                   // AttachAvailabilityChangeEvent
+    });
+}
+
+ServiceRegistrar r_nfp_user("nfp:user", [] {
+    return make("nfp:user", [](Service& s) {
+        s.cmds[0] = [](IpcCtx& c) { c.push_object(nfc_user("nfp:IUser")); return 0u; };  // CreateUserInterface
+    });
+});
+
+ServiceRegistrar r_nfc_user("nfc:user", [] {
+    return make("nfc:user", [](Service& s) {
+        s.cmds[0] = [](IpcCtx& c) { c.push_object(nfc_user("nfc:IUser")); return 0u; };  // CreateUserInterface
+    });
+});
+
 }  // namespace
 
 }  // namespace nx

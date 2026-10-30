@@ -1,4 +1,4 @@
-// Super Mario Bros. Wonder (010015100B514000, 1.0.0): what the shared runtime needs to know about the game.
+// Super Mario Bros. Wonder (010015100B514000, 1.2.0 update): what the shared runtime needs to know about the game.
 // The game draws through NVN (docs/NVN.md); what we know about it is in docs/nvn/WONDER.md.
 #include <nx/game.h>
 #include <nx/runtime.h>
