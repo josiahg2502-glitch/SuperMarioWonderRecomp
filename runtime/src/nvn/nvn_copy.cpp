@@ -87,6 +87,15 @@ void replay_copy(VkCommandBuffer cb, const Cmd& c, const CmdList& list) {
     };
     VkImageSubresourceLayers ss = sub(*src, sl, info.src[2], info.src[5], info.src_view.min_layer, s3d);
     VkImageSubresourceLayers ds = sub(*dst, dl, info.dst[2], info.dst[5], info.dst_view.min_layer, d3d);
+    // The regions are in the game's pixels: each in its own image's render scale. A copy between a scaled and an
+    // unscaled image (the frame captured for a screen transition) becomes a blit.
+    auto scale_region = [](int32_t* r, float s) {
+        if (s == 1.0f) return;
+        const int32_t g[4] = {r[0], r[1], r[3], r[4]};
+        VkRect2D v = scaled_rect(g, s);
+        r[0] = v.offset.x, r[1] = v.offset.y, r[3] = int32_t(v.extent.width), r[4] = int32_t(v.extent.height);
+    };
+    scale_region(info.src, src->scale), scale_region(info.dst, dst->scale);
     int32_t sw = std::max(info.src[3], 1), sh = std::max(info.src[4], 1);
     int32_t dw = std::max(info.dst[3], 1), dh = std::max(info.dst[4], 1);
     if (same) {

@@ -187,13 +187,60 @@ HandleSlot* handle_slot(uint64_t handle) {
     }
 }
 
+// The render_scale entries a draw's shaders read (NX_RENDER_SCALE; Ryujinx's TextureBindingsManager.UpdateScale and
+// the translator's helpers): [0] the render target's (gl_FragCoord.xy is divided by it); [1 + n] texture n of the
+// fragment or compute stage, n its rank among the stage's texture bindings (the translator's numbering); [1 +
+// fragment count + n] the vertex stage's. A fragment stage's texture at the target's scale and aspect is negative:
+// its texel fetches then add the pixel's place within the scaled texel, keeping the full resolution. Images are never
+// scaled (scale_of), so 1.
+struct Scales {
+    uint32_t used = 1;  // entries [0, used) may differ from 1
+    int32_t fragment_count = 0;
+    float v[73];
+    bool operator==(const Scales& o) const {
+        return used == o.used && fragment_count == o.fragment_count && std::memcmp(v, o.v, used * sizeof(float)) == 0;
+    }
+};
+
+Scales draw_scales(const std::vector<const ShaderInfo*>& shaders, float target_scale, VkExtent2D target) {
+    Scales out;
+    std::fill(std::begin(out.v), std::end(out.v), 1.0f);
+    if (render_scale() == 1.0f) return out;
+    const bool compute = !shaders.empty() && shaders[0]->stage == ShaderStage::Compute;
+    out.v[0] = compute ? 1.0f : target_scale;
+    const DrawTextures& t = g_textures;
+    for (auto [s, b] : t.bindings) out.fragment_count += s->stage == ShaderStage::Fragment;
+    const ShaderInfo* prev = nullptr;
+    uint32_t rank = 0;
+    for (size_t k = 0; k < t.bindings.size(); k++) {
+        const ShaderInfo* s = t.bindings[k].first;
+        rank = s == prev ? rank + 1 : 0, prev = s;
+        uint64_t texture = k < t.resolved.size() ? t.resolved[k].texture : 0;
+        GpuImage* img = texture ? image_of(texture) : nullptr;
+        if (!img || img->scale == 1.0f) continue;
+        float v = img->scale;
+        bool fragment = s->stage == ShaderStage::Fragment;
+        if (fragment && v == target_scale && uint64_t(target.width) * img->height == uint64_t(target.height) * img->width)
+            v = -v;
+        uint32_t at = 1 + rank + (fragment || compute ? 0 : uint32_t(out.fragment_count));
+        if (at < 73) out.v[at] = v, out.used = std::max(out.used, at + 1);
+    }
+    return out;
+}
+
+void apply_scales(SupportBuffer& sb, const Scales& s) {
+    for (uint32_t k = 0; k < s.used; k++) sb.render_scale[k][0] = s.v[k];
+    sb.frag_scale_count[0] = s.fragment_count;
+}
+
 // Host data every draw binds (the support buffer, c[0]) is the same for most draws of a submit, and was built and
 // copied for each stage of each draw (~11 KB per draw). DEBUG.md #30's rule stands: dedup shares bytes by address, so
 // only bytes that do not change during the submit may go through it, and the stack copies these were built in did.
 // Here each distinct content gets a block of its own for the submit, found by what it is made from, and dedup keeps
 // one upload of it. The blocks are reused from sets_begin_submit on, where dedup starts over too.
 struct SupportBlock {
-    float width = 0, height = 0;  // the key: support_buffer_set_viewport's arguments
+    float width = 0, height = 0;  // the key: support_buffer_set_viewport's arguments, and the render scales
+    Scales scales;
     SupportBuffer sb;
 };
 struct ConstantsBlock {
@@ -206,16 +253,18 @@ std::vector<std::unique_ptr<SupportBlock>> g_support;
 std::vector<std::unique_ptr<ConstantsBlock>> g_constants;
 size_t g_support_used = 0, g_constants_used = 0;
 
-const SupportBuffer* support_block(float width, float height) {
+const SupportBuffer* support_block(float width, float height, const Scales& scales) {
     for (size_t k = 0; k < g_support_used; k++)
-        if (std::memcmp(&g_support[k]->width, &width, 4) == 0 && std::memcmp(&g_support[k]->height, &height, 4) == 0)
+        if (std::memcmp(&g_support[k]->width, &width, 4) == 0 && std::memcmp(&g_support[k]->height, &height, 4) == 0 &&
+            g_support[k]->scales == scales)
             return &g_support[k]->sb;
     if (g_support_used == kBlocks) return nullptr;
     if (g_support_used == g_support.size()) g_support.push_back(std::make_unique<SupportBlock>());
     SupportBlock& b = *g_support[g_support_used++];
-    b.width = width, b.height = height;
+    b.width = width, b.height = height, b.scales = scales;
     b.sb = support_buffer_defaults();
     support_buffer_set_viewport(b.sb, width, height);
+    apply_scales(b.sb, scales);
     return &b.sb;
 }
 
@@ -385,7 +434,8 @@ void texture_for(uint64_t handle, uint64_t& texture, SamplerInfo& sampler, ViewI
 // gather_textures left them), storage images (set 3). Records uploads and layout changes, so it runs outside render
 // passes when textures or images need them. A set is allocated when its first binding is written: the sets no stage
 // declares anything in (usually two of the four) are neither allocated nor bound.
-void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shaders, const ProgramLayout& layout) {
+void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shaders, const ProgramLayout& layout,
+                float target_scale, VkExtent2D target) {
     Descriptors& d = g_sets;
     if (draw_slow(kSlowScratch))
         d = Descriptors{};
@@ -407,9 +457,11 @@ void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shader
     float vw = g_state.has_viewport ? float(g_state.viewport[2]) : 1280.0f;
     float vh = g_state.has_viewport ? float(g_state.viewport[3]) : 720.0f;
     SupportBuffer sb;  // built when a binding gets a copy of its own
-    bool sb_built = false;
+    bool sb_built = false, scales_known = false;
+    Scales scales;
     auto support = [&]() -> VkDescriptorBufferInfo {
-        const SupportBuffer* block = shared ? support_block(vw, vh) : nullptr;
+        if (!scales_known) scales = draw_scales(shaders, target_scale, target), scales_known = true;
+        const SupportBuffer* block = shared ? support_block(vw, vh, scales) : nullptr;
         if (block) {
             Upload u = dedup_upload(reinterpret_cast<const uint8_t*>(block), sizeof sb, sizeof sb, 256);
             return {u.buffer, u.offset, sizeof sb};
@@ -417,6 +469,7 @@ void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shader
         if (!sb_built) {
             sb = support_buffer_defaults();
             support_buffer_set_viewport(sb, vw, vh);
+            apply_scales(sb, scales);
             sb_built = true;
         }
         return buffer_of(cb, &sb, sizeof sb, 16, false, false);

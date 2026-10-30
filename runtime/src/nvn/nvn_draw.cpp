@@ -59,6 +59,7 @@ uint32_t g_pass_written = 0;  // targets the open pass's draws wrote: bit c colo
 uint64_t g_pass_ends[8];  // passes ended, by draw_end_rendering reason
 uint64_t g_submit_ns = 0;  // when the submit being replayed started
 VkExtent2D g_pass_extent{};
+float g_pass_scale = 1.0f;  // its attachments' render scale (the first one's; they differ only in a mixed pass)
 
 // What this submit's command buffer already has bound and set. Vulkan keeps the pipeline, vertex and index buffers
 // and dynamic state of a command buffer across its dynamic-rendering passes, and most draws repeated what the draw
@@ -125,11 +126,21 @@ void begin_rendering(VkCommandBuffer cb, const Targets& t) {
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     VkExtent2D extent{UINT32_MAX, UINT32_MAX};
     VkFormat formats[8]{};  // the views' (render pass objects)
+    float scale = 0;  // the first attachment's render scale
+    const GpuImage* first = nullptr;
+    auto note_scale = [&](const GpuImage& img) {
+        static int mixed = 0;
+        if (!scale) scale = img.scale, first = &img;
+        else if (scale != img.scale && mixed++ < 5)
+            log("nvn/vk: a pass on targets of render scales %g (%ux%u format %#x) and %g (%ux%u format %#x)", scale,
+                first->width, first->height, first->nvn_format, img.scale, img.width, img.height, img.nvn_format);
+    };
     for (uint32_t k = 0; k < t.color_count; k++) {
         colors[k].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         GpuImage* img = t.colors[k] ? image_of(t.colors[k]) : nullptr;
         g_pass_images[k] = img;
         if (!img) continue;
+        note_scale(*img);
         if (img->layout == VK_IMAGE_LAYOUT_UNDEFINED && !load_undefined) fresh |= 1u << k;
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);  // rendered images stay GENERAL (sampled while rendered)
         img->rendered = true;
@@ -155,6 +166,7 @@ void begin_rendering(VkCommandBuffer cb, const Targets& t) {
     GpuImage* dimg = t.depth ? image_of(t.depth) : nullptr;
     g_pass_images[8] = dimg;
     if (dimg && dimg->aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
+        note_scale(*dimg);
         if (dimg->layout == VK_IMAGE_LAYOUT_UNDEFINED && !load_undefined) fresh |= 1u << 8;
         transition(cb, *dimg, VK_IMAGE_LAYOUT_GENERAL);
         dimg->rendered = true;
@@ -192,6 +204,7 @@ void begin_rendering(VkCommandBuffer cb, const Targets& t) {
     trace_pass("begin: cleared, fresh", t, cleared, fresh);
     g_pass = t;
     g_pass_extent = extent;
+    g_pass_scale = scale ? scale : 1.0f;
 }
 
 uint64_t g_dump_draws = 0, g_dump_request = 0;
@@ -325,7 +338,20 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
         draw_end_rendering(cb, 1);
     }
 
-    build_sets(cb, *shaders, layout);
+    if (render_scale() == 1.0f) {
+        build_sets(cb, *shaders, layout);
+    } else {
+        // The pass may begin only below: its scale and size from its first attachment, as begin_rendering finds them.
+        GpuImage* first = nullptr;
+        uint32_t level = 0;
+        for (uint32_t k = 0; k < tt.color_count && !first; k++)
+            if (tt.colors[k] && (first = image_of(tt.colors[k]))) level = tt.views.level[k];
+        if (!first && tt.depth && (first = image_of(tt.depth))) level = tt.views.level[8];
+        level = first ? std::min<uint32_t>(level, first->levels - 1) : 0;
+        build_sets(cb, *shaders, layout, first ? first->scale : 1.0f,
+                   first ? VkExtent2D{std::max(1u, first->width >> level), std::max(1u, first->height >> level)}
+                         : VkExtent2D{});
+    }
     // Vertex and index data before the pass begins: a range a dispatch of this submit wrote may need a GPU copy
     // (nvn_written.cpp), which cannot be recorded inside a pass.
     DrawInputs in;
@@ -386,9 +412,10 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
     bind_vertex(cb, 15, zero_stream());
 
     VkViewport vp{0, 0, float(g_pass_extent.width), float(g_pass_extent.height), 0, 1};
+    const float ps = g_pass_scale;  // the game's pixels -> the scaled targets'
     if (g_state.has_viewport)
-        vp = {float(g_state.viewport[0]), float(g_state.viewport[1]), float(g_state.viewport[2]),
-              float(g_state.viewport[3]), g_state.depth_near, g_state.depth_far};
+        vp = {ps * float(g_state.viewport[0]), ps * float(g_state.viewport[1]), ps * float(g_state.viewport[2]),
+              ps * float(g_state.viewport[3]), g_state.depth_near, g_state.depth_far};
     // NVN's upper-left window origin (what Wonder sets) maps NDC +Y to the top of the render target, like D3D;
     // Vulkan maps it to the bottom. A negative-height viewport gives NVN's mapping, and with it NVN's front faces.
     // (Before this, the front face was inverted instead: triangles were culled right, but every render target was
@@ -397,8 +424,7 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
     vp.y += vp.height, vp.height = -vp.height;
     VkRect2D sc{{0, 0}, g_pass_extent};
     if (g_state.has_scissor)
-        sc = {{std::max(0, g_state.scissor[0]), std::max(0, g_state.scissor[1])},
-              {uint32_t(std::max(0, g_state.scissor[2])), uint32_t(std::max(0, g_state.scissor[3]))}};
+        sc = scaled_rect(g_state.scissor, ps);
     set_dynamic(cb, vp, sc);
 
     trace_skin(indexed, c, vs, fs);
@@ -554,6 +580,7 @@ void draw_end_rendering(VkCommandBuffer cb, int reason) {  // and the pending cl
 bool pass_open() { return g_rendering; }
 bool pass_open_on(const Targets& t) { return g_rendering && targets_same(g_pass, t); }
 VkExtent2D pass_extent() { return g_pass_extent; }
+float pass_scale() { return g_pass_scale; }
 void pass_begin(VkCommandBuffer cb, const Targets& t) { begin_rendering(cb, t); }
 // After a clear inside the pass (nvn_clears.cpp). A masked one is a fullscreen draw with its own pipeline, viewport
 // and scissor (nvn_mask_clear.cpp): the next draw sets everything again.

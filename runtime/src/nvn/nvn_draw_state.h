@@ -127,7 +127,10 @@ struct DrawTextures {
 extern DrawTextures g_textures;  // filled by gather_textures, read by build_sets and the traces of the same draw
 enum : uint32_t { kNeedBreak = 1, kSampledPending = 2 };
 uint32_t gather_textures(const std::vector<const ShaderInfo*>& shaders);
-void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shaders, const ProgramLayout& layout);
+// `target_scale`, `target`: the render scale and size of what the draw renders into (the support buffer's
+// render_scale; NX_RENDER_SCALE). Compute: none.
+void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shaders, const ProgramLayout& layout,
+                float target_scale = 1.0f, VkExtent2D target = {});
 // vkUpdateDescriptorSets for what build_sets made, then the sets bound at `point`.
 void bind_sets(VkCommandBuffer cb, VkPipelineBindPoint point, const ProgramLayout& layout);
 Upload zero_stream();  // 64 zero bytes for vertex binding 15

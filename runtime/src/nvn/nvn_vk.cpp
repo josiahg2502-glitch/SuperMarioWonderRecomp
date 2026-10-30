@@ -640,6 +640,13 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
     }
     if (!check(r, "vkAcquireNextImageKHR") || !begin()) return;
     GpuImage* src = image_of(texture);
+    int32_t scaled_crop[4];  // the crop is in the game's pixels, the image may be render-scaled
+    if (src && crop && src->scale != 1.0f) {
+        VkRect2D r = scaled_rect(crop, src->scale);
+        scaled_crop[0] = r.offset.x, scaled_crop[1] = r.offset.y;
+        scaled_crop[2] = int32_t(r.extent.width), scaled_crop[3] = int32_t(r.extent.height);
+        crop = scaled_crop;
+    }
     GpuImage dst;
     dst.image = g_sc_images[index];
     dst.format = g_sc_format;

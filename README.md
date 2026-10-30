@@ -111,7 +111,7 @@ The bar this fork holds itself to, and where it stands:
 |---|---|
 | Native, beats emulation | Yes: recompiled CPU code, NVN on Vulkan, no emulator |
 | Steady 60 fps, even pacing | 60 fps. Frames are paced on the display's vertical blank (Windows). Pipelines compile off the render thread. Software ASTC decode can still hitch while a level loads. |
-| 4K, render scale above native | Open: the game renders at its own 1080p and the image is scaled to the window |
+| 4K, render scale above native | `NX_RENDER_SCALE` (1 to 4): the game's render targets at that multiple, 2 renders 3840x2160. Not yet in the game's menus |
 | Widescreen/ultrawide, adaptive HUD | Open |
 | Settings in the game's own menus | Open: options are environment variables for now |
 | Mod support | RomFS mods (above) |
@@ -191,7 +191,8 @@ Useful switches:
 
 | Switch | What it does |
 |---|---|
-| `NX_MEM_LIMIT_GB=<n>` | memory guard, ends the process past this footprint (default 8) |
+| `NX_RENDER_SCALE=<s>` | internal resolution, 1 to 4 times the game's (2: 3840x2160 docked); integers are exact |
+| `NX_MEM_LIMIT_GB=<n>` | memory guard, ends the process past this footprint (default 8, plus 2 GB per unit of s² − 1 with a render scale: the GPU driver's memory counts) |
 | `NX_HEADLESS=1` | no window, for unattended test runs |
 | `NX_MUTE=1` | no sound |
 | `NX_HANDHELD=1` | handheld mode, 720p |
