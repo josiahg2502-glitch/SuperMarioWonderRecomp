@@ -81,8 +81,14 @@ The details are in the GitHub milestones.
 - **Character-select blur:** needs a reference from a real console.
 - **Android rendering bugs and performance:** hand-off notes in [docs/nvn/android-perf/](docs/nvn/android-perf/).
 - **Linux:** see [Platforms](#platforms).
-- **Toads' eyes:** Toad, Toadette and the other Toads show only one eye. Wrap modes, culling and texture uploads
-  are ruled out. Suspect: the ~500 shaders whose sampler type the offline translator assumed was 2D.
+- **Toads' eyes:** Toad, Toadette and the other Toads show only one eye; Mario's far eye, drawn over his nose,
+  is fine.
+  - Ruled out: wrap modes, culling, texture uploads, depth bias (`NX_DEPTH_BIAS_UNITS`), stencil, array textures
+    viewed as 2D, and draw parameters.
+  - Each eye is a 128x128 dot texture placed by UV math. The Toads draw with shaders of their own:
+    `d26102316f876f15` and `1b83ae2af085a1d7`, with vertex shaders `0cae6875f45fad82`, `383b3ea026cfd8b9`,
+    `a70acd9e00407790` and `b69f73aad6d1f664`.
+  - Next: a frame capture of a Toad draw, to see the eye material's draw and its constant buffers.
 
 ### Mods
 
