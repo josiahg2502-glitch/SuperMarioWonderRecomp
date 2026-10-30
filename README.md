@@ -103,6 +103,10 @@ How mods combine:
 
 ExeFS patches (IPS/cheats) do not apply: the code is recompiled, not patched.
 
+The recomp's own menu entries (the pause menu's "Quit Game") are a mod too, built from your RomFS once after
+extracting it: `python tools/wonder_menu_mod.py` writes `private/wonder/mods/recomp-menu/` (needs `zstandard`).
+How it works: [docs/MENU.md](docs/MENU.md).
+
 ### Quality bar
 
 The bar this fork holds itself to, and where it stands:
@@ -113,11 +117,11 @@ The bar this fork holds itself to, and where it stands:
 | Steady 60 fps, even pacing | 60 fps. Frames are paced on the display's vertical blank (Windows). Pipelines compile off the render thread. Software ASTC decode can still hitch while a level loads. |
 | 4K, render scale above native | Open: the game renders at its own 1080p and the image is scaled to the window |
 | Widescreen/ultrawide, adaptive HUD | Open |
-| Settings in the game's own menus | Open: options are environment variables for now |
+| Settings in the game's own menus | Started: the pause menu has the recomp's "Quit Game" button ([docs/MENU.md](docs/MENU.md)). The other options are environment variables or `private/wonder/user/settings.txt` lines for now |
 | Mod support | RomFS mods (above) |
 | Steam Deck (Proton, 1280x800) | Untested. The Windows build has no Proton-specific code. |
 | Fast-forward | Hold Tab (no menu toggle yet) |
-| Save anywhere, faster animations, quit from menu | Open |
+| Save anywhere, faster animations, quit from menu | Quit from the pause menu: yes. Save anywhere, faster animations: open |
 
 ### Windows
 

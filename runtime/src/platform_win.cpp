@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 
 #include <windows.h>
@@ -129,8 +130,15 @@ void audio_pause(bool) {}
 std::string setting(const std::string& key) {
     std::string env = "NX_";
     for (char ch : key) env += char(std::toupper(static_cast<unsigned char>(ch)));
-    const char* v = std::getenv(env.c_str());
-    return v ? v : "";
+    if (const char* v = std::getenv(env.c_str())) return v;
+    // Then <data root>/user/settings.txt, key=value lines: where the in-game options keep the player's choices.
+    std::ifstream f(std::filesystem::u8path(data_root() + "/user/settings.txt"));
+    for (std::string line; std::getline(f, line);) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (line.size() > key.size() && line.compare(0, key.size(), key) == 0 && line[key.size()] == '=')
+            return line.substr(key.size() + 1);
+    }
+    return "";
 }
 int64_t current_thread_id() { return int64_t(GetCurrentThreadId()); }
 bool profile(const int64_t*, const uint64_t* const*, size_t, int, const std::string&) { return false; }
