@@ -43,7 +43,7 @@ bool make_dirs(const std::string& path);
 // ---- output ----
 void log_line(const char* line);  // stderr / logcat
 std::string data_root();
-std::string setting(const std::string& key);  // a player setting: config.txt (Android), NX_<KEY> (PC); "" if unset          // where private/ lives ("private" on PC, the app's external files dir on Android)
+std::string setting(const std::string& key);  // a player setting: config.txt (Android), NX_<KEY> then user/settings.txt (PC); "" if unset          // where private/ lives ("private" on PC, the app's external files dir on Android)
 
 // ---- display, input, audio ----
 void* create_window();       // native window handle for the Vulkan surface (HWND / ANativeWindow*), kept alive

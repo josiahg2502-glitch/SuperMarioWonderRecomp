@@ -9,7 +9,11 @@ const game::Info game::kInfo = {"wonder", "Super Mario Bros. Wonder", 0x01001510
                                 "io.github.belmantegu.wonderrecomp", "private/wonder",
                                 0x1000000 /* main.npdm: 16 MiB system resource */};
 
-void game::after_init() {}
+namespace wonder {
+void menu_init();
+}
+
+void game::after_init() { wonder::menu_init(); }
 void game::renderer_start() {}
 void game::first_frame() {}
 
