@@ -179,8 +179,19 @@ bool make_dirs(const std::string& path) {
 void log_line(const char* line) { std::fprintf(stderr, "%s\n", line); }
 
 std::string data_root() {
-    const char* r = std::getenv("NX_DATA_ROOT");
-    return r ? r : nx::game::kInfo.pc_data_root;
+    static const std::string root = [] {
+        if (const char* r = std::getenv("NX_DATA_ROOT")) return std::string(r);
+        // An installed release keeps the game's files in data\ next to the exe (tools/install_wonder.py).
+        wchar_t b[MAX_PATH];
+        GetModuleFileNameW(nullptr, b, MAX_PATH);
+        auto data = std::filesystem::path(b).parent_path() / L"data";
+        if (std::filesystem::exists(data / L"extract")) {
+            auto u = data.u8string();
+            return std::string(u.begin(), u.end());
+        }
+        return std::string(nx::game::kInfo.pc_data_root);
+    }();
+    return root;
 }
 
 // ---- window ---------------------------------------------------------------------------------------------------
@@ -222,6 +233,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
                 return 0;
             }
             break;
+        case WM_APP + 1:  // set_fullscreen
+            if (bool(w) != g_fullscreen) toggle_fullscreen(h);
+            return 0;
         case WM_SYSCHAR:
             if (w == VK_RETURN) return 0;  // no beep
             break;
@@ -252,7 +266,7 @@ static void window_thread(std::atomic<bool>* ready) {
     const DWORD style = headless() ? (kWindowed & ~WS_VISIBLE) : kWindowed;
     g_window = CreateWindowW(wc.lpszClassName, (widen(nx::game::kInfo.title) + L" (Switch recomp)  -  F11: fullscreen").c_str(), style,
                              std::max(0, x), std::max(0, y), w, h, nullptr, nullptr, wc.hInstance, nullptr);
-    if (const char* f = std::getenv("NX_FULLSCREEN"); f && *f == '1' && !headless()) toggle_fullscreen(g_window);
+    if (setting("fullscreen") == "1" && !headless()) toggle_fullscreen(g_window);  // NX_FULLSCREEN or the option
     if (!headless()) SetForegroundWindow(g_window);
     *ready = true;
     MSG m;
@@ -286,7 +300,25 @@ void screen_size(uint32_t& w, uint32_t& h) { window_size(w, h); }
 
 static bool key(int vk) { return g_window && GetForegroundWindow() == g_window && (GetAsyncKeyState(vk) & 0x8000); }
 
-bool fast_forward() { return key(VK_TAB); }
+bool fast_forward() {
+    if (key(VK_TAB)) return true;
+    XINPUT_STATE xs{};
+    return XInputGetState(0, &xs) == ERROR_SUCCESS && (xs.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB);
+}
+
+void* load_library(const std::string& path) {
+    return LoadLibraryW(std::filesystem::u8path(path).wstring().c_str());
+}
+void* library_symbol(void* lib, const char* name) {
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(lib), name));
+}
+const char* library_extension() { return ".dll"; }
+
+// The window thread switches (its own message loop owns the window).
+static constexpr UINT kSetFullscreen = WM_APP + 1;
+void set_fullscreen(bool on) {
+    if (g_window && !headless()) PostMessageW(g_window, kSetFullscreen, on, 0);
+}
 
 bool headless() {  // NX_HEADLESS (platform.h)
     static const bool on = std::getenv("NX_HEADLESS") != nullptr;

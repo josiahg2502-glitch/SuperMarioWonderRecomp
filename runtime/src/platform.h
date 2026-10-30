@@ -70,7 +70,12 @@ struct PadState {
     int32_t lx = 0, ly = 0, rx = 0, ry = 0;
 };
 void read_pad(PadState& p);  // player 1
-bool fast_forward();  // held: the game runs unpaced (Tab on PC; false where there is no key for it)
+bool fast_forward();  // the fast-forward keys are down (Tab or the right stick click on PC; false where there are none)
+void set_fullscreen(bool on);
+// Code mods (code_mods.cpp): a shared library and its symbols; nullptr where there are none.
+void* load_library(const std::string& path);
+void* library_symbol(void* lib, const char* name);
+const char* library_extension();  // ".dll", ".so", ".dylib"  // the window fills the screen (PC; nothing elsewhere)
 // Touch controls to draw over the picture (touch_layout.cpp, platform_android_input.cpp): circles at x, y (0..1
 // across the landscape screen), radius r (a fraction of its height), opacity alpha. 0 where nothing is drawn.
 struct OverlayShape {

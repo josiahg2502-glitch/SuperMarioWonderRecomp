@@ -177,6 +177,10 @@ void yield() {
 }
 bool wait_vblank() { return false; }
 bool fast_forward() { return false; }
+void set_fullscreen(bool) {}
+void* load_library(const std::string&) { return nullptr; }
+void* library_symbol(void*, const char*) { return nullptr; }
+const char* library_extension() { return ".dylib"; }
 void set_thread_name(const char* name) { pthread_setname_np(name); }  // Darwin: the calling thread only
 
 int64_t current_thread_id() {

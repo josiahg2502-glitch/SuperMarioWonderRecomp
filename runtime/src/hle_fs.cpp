@@ -21,6 +21,7 @@
 
 #include <nx/runtime.h>
 
+#include "options.h"
 #include "platform.h"
 
 namespace fs = std::filesystem;
@@ -322,6 +323,17 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
     c.x[0] = kOk;
 }
 
+// A load in progress: 4 MiB read within a quarter second (streamed audio reads far less), for the faster-loads
+// option (options.h).
+void loading(uint64_t bytes) {
+    static std::mutex m;
+    static uint64_t window = 0, read = 0;
+    std::lock_guard lk(m);
+    uint64_t now = plat::monotonic_ns() / 250'000'000;
+    if (now != window) window = now, read = 0;
+    if ((read += bytes) >= (4u << 20)) opt::busy(300'000'000);
+}
+
 uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
     uint64_t t0 = plat::monotonic_ns();
     uint64_t n = plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
@@ -335,6 +347,7 @@ uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
         uint64_t k = ++reads[file.path];
         if (k <= 3 || k % 50 == 0) log("fs: stream read #%llu %s at %lld", (unsigned long long)k, file.path.c_str(), (long long)off);
     }
+    loading(n);
     if (ms >= 30)
         log("fs: slow read %s: %llu bytes at %lld took %llu ms", file.path.c_str(), (unsigned long long)size,
             (long long)off, (unsigned long long)ms);
@@ -371,6 +384,7 @@ void WriteFile(CPU& c) {  // (FileHandle, s64 off, const void* buf, size_t size,
     plat::fseek64(file->f, int64_t(c.x[1]), SEEK_SET);
     fwrite(reinterpret_cast<const void*>(c.x[2]), 1, c.x[3], file->f);
     fflush(file->f);  // positional reads bypass the FILE buffer (saves only: rare and small)
+    opt::busy(1'000'000'000);  // a save: its animation runs faster with the faster-saves option
     c.x[0] = kOk;
 }
 

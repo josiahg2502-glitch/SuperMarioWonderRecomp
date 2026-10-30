@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
 project(SwitchGamesRecomp C CXX)
+# The release version (VERSION): the updater compares it with GitHub's newest release.
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" NX_VERSION LIMIT_COUNT 1)
+add_compile_definitions(NX_VERSION="${NX_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -186,6 +189,8 @@ set(NX_RUNTIME_SOURCES
     runtime/src/vk_swapchain.cpp
     runtime/src/vk_gen.cpp
     runtime/src/vk_present.cpp
+    runtime/src/options.cpp
+    runtime/src/code_mods.cpp
 )
 file(GLOB NX_GAME_SOURCES CONFIGURE_DEPENDS "${NX_GAME_DIR}/*.cpp")
 list(APPEND NX_RUNTIME_SOURCES ${NX_GAME_SOURCES} ${NX_SHADER_SOURCES})
@@ -216,9 +221,10 @@ elseif(APPLE)
     # The executable loads near 0x1_0000_0000, below the guest ranges (0x40_0000_0000 and up). The game runs on its
     # own thread with a 64 MiB stack (platform_mac.cpp), so the main thread's stack size does not matter.
 else()
-    add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/memguard_win.cpp)
+    add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/memguard_win.cpp
+        runtime/src/updater_win.cpp)
     target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_SDK}/Include")
-    target_link_libraries(${NX_GAME} PRIVATE game_main game_sdk xinput xaudio2 ole32 psapi)
+    target_link_libraries(${NX_GAME} PRIVATE game_main game_sdk xinput xaudio2 ole32 psapi winhttp)
     # The runtime uses the portable C library (getenv, fopen, ...) on every host: no "_s" variants.
     target_compile_definitions(${NX_GAME} PRIVATE _CRT_SECURE_NO_WARNINGS _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
     if(MSVC)
@@ -229,3 +235,10 @@ else()
 endif()
 
 target_include_directories(${NX_GAME} PRIVATE "${NX_SHADER_OUT}")
+
+# The example code mod (nx/mod.h, docs/MODS.md): <build>/mods/hello/hello.dll.
+if(WIN32)
+    add_library(mod_hello SHARED examples/mods/hello/hello.cpp)
+    target_include_directories(mod_hello PRIVATE runtime/include)
+    set_target_properties(mod_hello PROPERTIES OUTPUT_NAME hello RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mods/hello")
+endif()

@@ -134,6 +134,10 @@ void yield() {
 }
 bool wait_vblank() { return false; }
 bool fast_forward() { return false; }
+void set_fullscreen(bool) {}
+void* load_library(const std::string&) { return nullptr; }
+void* library_symbol(void*, const char*) { return nullptr; }
+const char* library_extension() { return ".so"; }
 void set_thread_name(const char* name) { pthread_setname_np(pthread_self(), name); }
 int64_t current_thread_id() { return gettid(); }
 

@@ -10,6 +10,7 @@
 #include <nx/runtime.h>
 
 #include "kernel.h"
+#include "options.h"
 #include "platform.h"
 
 extern const nx::ModuleInfo nx_module_main;
@@ -101,6 +102,13 @@ static void init_module(CPU& c, const ModuleInfo& m) {
     log("%s constructors: %zu", m.name, status == 1 ? m.init_count : 0);
 }
 
+void load_code_mods();  // code_mods.cpp
+#if defined(_WIN32)
+void start_updater();  // updater_win.cpp
+#else
+static void start_updater() {}
+#endif
+
 static void rtld_init(CPU&) {}
 static void rtld_fini(CPU&) {}
 static void rtld_mark(CPU&) {}
@@ -110,7 +118,10 @@ static void rtld_mark(CPU&) {}
 static void nn_main(CPU& c) {
     init_module(c, nx_module_sdk);
     init_module(c, nx_module_main);
+    opt::load();
     game::after_init();
+    load_code_mods();
+    start_updater();
     log("entering nnMain");
     uint64_t real = 0;
     for (size_t k = 0; k < nx_module_main.symbol_count; k++)

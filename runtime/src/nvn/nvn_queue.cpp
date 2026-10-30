@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "nvn.h"
+#include "options.h"
 #include "platform.h"
 
 namespace nx {
@@ -350,7 +351,7 @@ void WindowSetPresentInterval(CPU& c) {
 void pace_present(int interval) {
     static const bool off = std::getenv("NX_NO_FRAME_LIMIT") != nullptr;
     static uint64_t next = 0;
-    if (off || interval <= 0 || plat::fast_forward()) return;
+    if (off || interval <= 0 || opt::fast()) return;
     uint64_t now = vsync_wait(next);
     static uint64_t presents = 0, at2 = 0;  // how often the game asks for 30 fps (interval 2), per 600 presents
     // Pacing: presents more than a vsync later than asked (a frame shown late or twice), and the longest gap.

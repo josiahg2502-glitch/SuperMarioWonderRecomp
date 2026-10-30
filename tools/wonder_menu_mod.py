@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Builds the recomp's own entries into Wonder's menus as a RomFS mod (docs/MENU.md).
 
-Today: a "Quit Game" button in the pause menu, under "Exit Course". It is the game's own button (a copy of the
-L_BtnExit part, same look and animations), its label is in every language, and it reports the new PauseResult value
-QuitToDesktop, which the runtime adds to the game's enum and acts on (games/wonder/menu.cpp).
+Two buttons in the pause menu, under "Exit Course": "Quit Game" and "Recomp Settings". Each is the game's own button
+(a copy of the L_BtnExit part, same look and animations) with its label in every language, and reports a new
+PauseResult value (QuitToDesktop, RecompOption) the runtime acts on (games/wonder/menu.cpp). Recomp Settings opens the
+game's Settings screen with the recomp's options in its rows: their texts go into GameMsg/Option.msbt.
 
 Reads the RomFS from private/wonder/extract/romfs and writes private/wonder/mods/recomp-menu/romfs/:
   Layout/Pause.Nin_NX_NVN.blarc.zs   the pause layout with the L_QuitBtn pane
   Pack/Bootup.Nin_NX_NVN.pack.zs     the pause screen's button table with the QuitToDesktop button
-  Mals/<lang>.Product.120.sarc.zs    the button's label (LayoutMsgRef/PauseRef.msbt)
+  Mals/<lang>.Product.120.sarc.zs    the buttons' labels (LayoutMsgRef/PauseRef.msbt), the options' texts
+                                     (GameMsg/Option.msbt)
   System/Resource/ResourceSizeTable.Product.120.rsizetable.zs   those files' sizes (they grew)
 Run it again after the RomFS changes (a game update). Needs the zstandard module.
 
@@ -24,9 +26,13 @@ import zstandard
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 QUIT_PANE = "L_QuitBtn"
-QUIT_ENUM = "QuitToDesktop"  # game::sequence::PauseResult value 8, added by games/wonder/menu.cpp
-QUIT_Y = -265.0  # one button step (130) under L_BtnExit
-ICON_ROW_Y = -405.0  # the round buttons (Settings, Control Guide...) move down to make room: from -355
+QUIT_ENUM = "QuitToDesktop"  # game::sequence::PauseResult names games/wonder/menu.cpp acts on
+RECOMP_PANE = "L_RecompBtn"
+RECOMP_ENUM = "RecompOption"
+# The left column, top to bottom (Continue stays at 255): steps of 120 instead of 130 make room for two more buttons
+# above the round buttons (Settings, Control Guide...), which move down from -355.
+BUTTON_Y = {"L_RetryBtn": 95.0, "L_BtnExit": -25.0, QUIT_PANE: -145.0, RECOMP_PANE: -265.0}
+ICON_ROW_Y = -445.0
 ICON_PANES = ("L_PlayerChangeBtn", "L_OptionBtn", "L_HelpBtn", "L_AmiiboBtn")
 QUIT_TEXT = {
     "USen": "Quit Game", "EUen": "Quit Game", "USfr": "Quitter le jeu", "EUfr": "Quitter le jeu",
@@ -35,6 +41,26 @@ QUIT_TEXT = {
     "EUpl": "Zakończ grę", "JPja": "ゲームを終了", "KRko": "게임 종료", "CNzh": "退出游戏", "TWzh": "結束遊戲",
     "THth": "ออกจากเกม",
 }
+RECOMP_TEXT = {
+    "USen": "Recomp Settings", "EUen": "Recomp Settings", "USfr": "Options du recomp", "EUfr": "Options du recomp",
+    "USes": "Opciones del recomp", "EUes": "Opciones del recomp", "EUde": "Recomp-Optionen",
+    "EUit": "Opzioni del recomp", "EUnl": "Recomp-instellingen", "EUpt": "Opções do recomp",
+    "USpt": "Opções do recomp", "EUru": "Настройки recomp", "EUpl": "Ustawienia recompu", "JPja": "リコンプ設定",
+    "KRko": "리컴프 설정", "CNzh": "重编译设置", "TWzh": "重編譯設定", "THth": "ตั้งค่า Recomp",
+}
+# The Settings screen's rows on the recomp's page, in the order of runtime/src/options.h (subject, choices). English
+# in every language for now.
+OPTION_TEXT = [
+    ("RecompRenderScale", "Render Resolution (after a restart)",
+     ["Native (1080p)", "1.5x (1620p)", "2x (4K)", "3x (6K)", "4x (8K)"]),
+    ("RecompFullscreen", "Fullscreen", ["Off", "On", "On"]),  # a third text: the game's row 1 can ask for it
+    ("RecompFastForward", "Fast-Forward (Tab or Right Stick Click)", ["Off", "Hold", "Toggle"]),
+    ("RecompFastSpeed", "Fast-Forward Speed", ["2x", "3x", "4x", "As Fast as Possible"]),
+    ("RecompFastLoads", "Faster Menus, Saves and Loads", ["Off", "On"]),
+    ("RecompSaveAnywhere", "Save Anywhere (Pause Menu)", ["Off", "On"]),
+    ("RecompQuitButton", "Quit Game Button in Pause Menu", ["Off", "On"]),
+    ("RecompAutoUpdate", "Automatic Updates", ["Off", "On"]),
+]
 
 
 # ---- zstd + SARC -------------------------------------------------------------------------------------------------
@@ -231,24 +257,31 @@ def pane_name(d, o):
 
 
 def patch_pause_layout(d):
-    """L_QuitBtn: a copy of L_BtnExit (same part, same look) right after it, one step lower; the icon row moves down."""
+    """L_QuitBtn and L_RecompBtn: copies of L_BtnExit (same part, same look) right after it; the column re-spaced
+    (BUTTON_Y) and the icon row moved down."""
     out = bytearray(d)
     src = None
     for o, magic, size in flyt_sections(d):
-        if magic == b"prt1" and pane_name(d, o) == "L_BtnExit":
+        name = pane_name(d, o) if magic == b"prt1" else None
+        if name == "L_BtnExit":
             src = (o, size)
-        if magic == b"prt1" and pane_name(d, o) in ICON_PANES:
+        if name in ICON_PANES:
             struct.pack_into("<f", out, o + 0x30, ICON_ROW_Y)  # translate.y
-        if magic == b"prt1" and pane_name(d, o) == QUIT_PANE:
-            raise SystemExit("the pause layout already has " + QUIT_PANE)
+        if name in BUTTON_Y:
+            struct.pack_into("<f", out, o + 0x30, BUTTON_Y[name])
+        if name in (QUIT_PANE, RECOMP_PANE):
+            raise SystemExit("the pause layout already has " + name)
     assert src, "L_BtnExit not found in Pause.bflyt"
     o, size = src
-    clone = bytearray(d[o:o + size])
-    clone[0xC:0xC + 24] = QUIT_PANE.encode().ljust(24, b"\0")
-    struct.pack_into("<f", clone, 0x30, QUIT_Y)
-    out[o + size:o + size] = clone
+    clones = b""
+    for pane in (QUIT_PANE, RECOMP_PANE):
+        clone = bytearray(out[o:o + size])
+        clone[0xC:0xC + 24] = pane.encode().ljust(24, b"\0")
+        struct.pack_into("<f", clone, 0x30, BUTTON_Y[pane])
+        clones += clone
+    out[o + size:o + size] = clones
     struct.pack_into("<I", out, 0xC, len(out))  # file size
-    struct.pack_into("<H", out, 0x10, struct.unpack_from("<H", d, 0x10)[0] + 1)  # section count
+    struct.pack_into("<H", out, 0x10, struct.unpack_from("<H", d, 0x10)[0] + 2)  # section count
     return bytes(out)
 
 
@@ -347,39 +380,53 @@ def main():
     romfs, out = a.romfs, os.path.join(a.out, "romfs")
     growth = {}
 
-    def mod(name, member, edit, member_heap=0):
+    def mod(name, edits, member_heap=0):
+        """edits: {member: function(old bytes) -> new bytes}."""
         arc = unzs(os.path.join(romfs, name))
-        old = sarc_get(arc, member)
-        data = edit(old)
-        new = sarc_replace(arc, {member: data})
+        files = {}
+        for member, edit in edits.items():
+            old = sarc_get(arc, member)
+            files[member] = edit(old)
+            if member_heap:  # a pack member is a resource of its own, whose entry also sizes what it is parsed into
+                growth[member] = len(files[member]) - len(old) + member_heap
+        new = sarc_replace(arc, files)
         growth[name[:-3]] = len(new) - len(arc)
-        if member_heap:  # a pack member is a resource of its own, whose entry also sizes what it is parsed into
-            growth[member] = len(data) - len(old) + member_heap
         write_zs(os.path.join(out, name), new)
 
-    mod("Layout/Pause.Nin_NX_NVN.blarc.zs", "blyt/Pause.bflyt", patch_pause_layout)
+    mod("Layout/Pause.Nin_NX_NVN.blarc.zs", {"blyt/Pause.bflyt": patch_pause_layout})
 
     def add_button(data):
         version, screen = byml_read(data)
         assert byml_read(byml_write(version, screen))[1] == screen, "BYML round trip changed the pause screen"
         buttons = screen["ButtonInfoGenerateTable"]
         exit_btn = next(b for b in buttons if b["PaneName"] == "L_BtnExit")
-        buttons.insert(buttons.index(exit_btn) + 1, {
-            **exit_btn, "PaneName": QUIT_PANE, "UniqueName": "QuitBtn",
-            "DecideInfoGenerateTable": {**exit_btn["DecideInfoGenerateTable"], "EnumValue": QUIT_ENUM}})
+        at = buttons.index(exit_btn) + 1
+        for pane, unique, enum in ((RECOMP_PANE, "RecompBtn", RECOMP_ENUM), (QUIT_PANE, "QuitBtn", QUIT_ENUM)):
+            buttons.insert(at, {**exit_btn, "PaneName": pane, "UniqueName": unique,
+                                "DecideInfoGenerateTable": {**exit_btn["DecideInfoGenerateTable"], "EnumValue": enum}})
         return byml_write(version, screen)
 
-    # The pause screen's entry (19136 for a 4660-byte file) is its parsed tables too: room for one more button.
-    mod("Pack/Bootup.Nin_NX_NVN.pack.zs", "Gyml/UIExtraScreenParam/Pause.game__UIExtraScreenParam.bgyml", add_button,
-        member_heap=0x2000)
+    # The pause screen's entry (19136 for a 4660-byte file) is its parsed tables too: room for more buttons.
+    mod("Pack/Bootup.Nin_NX_NVN.pack.zs",
+        {"Gyml/UIExtraScreenParam/Pause.game__UIExtraScreenParam.bgyml": add_button}, member_heap=0x4000)
 
     for f in sorted(os.listdir(os.path.join(romfs, "Mals"))):
         lang = f.split(".")[0]
         if lang not in QUIT_TEXT:
             print("skipped", f, "(no translation)")
             continue
-        mod("Mals/" + f, "LayoutMsgRef/PauseRef.msbt",
-            lambda m: msbt_add(m, QUIT_PANE + "-T_BtnName", QUIT_TEXT[lang]))
+        def pause_texts(m, lang=lang):
+            m = msbt_add(m, QUIT_PANE + "-T_BtnName", QUIT_TEXT[lang])
+            return msbt_add(m, RECOMP_PANE + "-T_BtnName", RECOMP_TEXT[lang])
+
+        def option_texts(m):
+            for name, subject, choices in OPTION_TEXT:
+                m = msbt_add(m, name + "_Subject", subject)
+                for k, text in enumerate(choices):
+                    m = msbt_add(m, f"{name}_Selection{k:02d}", text)
+            return m
+
+        mod("Mals/" + f, {"LayoutMsgRef/PauseRef.msbt": pause_texts, "GameMsg/Option.msbt": option_texts})
 
     name = "System/Resource/ResourceSizeTable.Product.120.rsizetable.zs"
     write_zs(os.path.join(out, name), rstb_grow(unzs(os.path.join(romfs, name)), growth))

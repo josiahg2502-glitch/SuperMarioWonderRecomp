@@ -9,6 +9,7 @@
 #include <nx/runtime.h>
 
 #include "kernel.h"
+#include "options.h"
 #include "platform.h"
 
 namespace nx {
@@ -54,8 +55,8 @@ void vsync_thread() {
     for (;;) {
         // On the display's own blank where its refresh is a multiple of 60 Hz: a timer of our own drifted against
         // it, and every few seconds MAILBOX showed a frame twice or dropped one (microstutter).
-        if (plat::fast_forward()) {  // ticks as fast as the game takes them (500 Hz at most)
-            plat::sleep_ns(2'000'000);
+        if (int64_t fast = opt::fast_tick_ns()) {  // fast-forward / faster loads (options.h)
+            plat::sleep_ns(fast);
             next = plat::monotonic_ns();
         } else if (plat::wait_vblank()) {
             next = plat::monotonic_ns();
