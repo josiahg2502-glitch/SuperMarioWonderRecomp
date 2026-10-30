@@ -548,6 +548,12 @@ void apply_texel_writes(VkCommandBuffer cb, Texture& t, GpuImage& img) {
         t.has_writes.store(false, std::memory_order_release);
     }
     if (writes.empty()) return;
+    // shortcut: texels written into a render-scaled image land at the game's coordinates (its top-left part);
+    // none seen in a run, scale the regions with a blit if one appears.
+    if (img.scale != 1.0f) {
+        static int logged = 0;
+        if (logged++ < 5) log("nvn/vk: texel writes into a render-scaled image (%ux%u) are not scaled", img.width, img.height);
+    }
     img.texels = true;
     VkImageLayout back = img.layout;
     transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -627,6 +633,14 @@ GpuImage* ensure_contents(VkCommandBuffer cb, uint64_t texture) {
     // (G3 cause 2, docs/nvn/DEBUG.md #50). NX_RT_UPLOAD=1: uploaded as before; NX_ALIAS_MAGENTA=1: cleared magenta.
     static const bool rt_upload = std::getenv("NX_RT_UPLOAD") != nullptr;
     static const bool magenta = std::getenv("NX_ALIAS_MAGENTA") != nullptr;
+    // A render-scaled image has no guest-sized layout to upload into: it starts cleared, whatever the flags say.
+    if (upload && img->scale != 1.0f) {
+        static int logged = 0;
+        if (logged++ < 5) log("nvn/vk: render-scaled texture %llx cleared, not uploaded", (unsigned long long)texture);
+        clear_image(cb, *img, magenta);
+        img->uploaded = true;
+        upload = false;
+    }
     if (upload && !rt_upload && (t->flags & 0x8) && !img->uploaded && !img->texels && !dirty) {
         if (!t->has_writes.load(std::memory_order_acquire)) {
             clear_image(cb, *img, magenta);

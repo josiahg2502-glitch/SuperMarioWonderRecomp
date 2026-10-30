@@ -2,6 +2,8 @@
 // resources, draws). Everything here runs under the GPU lock taken by gpu_submit / gpu_present.
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -32,7 +34,22 @@ struct GpuImage {
     // without swizzle. MoltenVK returned alpha 0 for that view swizzle on a 2D-array view, so all text was invisible.
     bool alpha_from_r = false;
     uint32_t nvn_format = 0;  // the texture's NVN format
+    // Render scale (NX_RENDER_SCALE): width and height are the texture's times this. Viewports, scissors, copies,
+    // the present's crop and the shaders' render_scale (texel fetches, size queries, gl_FragCoord) follow it.
+    float scale = 1.0f;
 };
+
+// NX_RENDER_SCALE (nvn_image.cpp): how much larger than the game's sizes its render targets are made, 1..4 (1: off).
+// Integers are exact; a fraction (1.5 for 1440p) leaves texel fetches of scaled targets slightly off.
+float render_scale();
+// A rectangle (x, y, width, height) in the game's pixels -> pixels of an image of render scale `s`; both edges
+// rounded, so rectangles that tile the target still tile it. Negative origins and sizes clamp to 0 (as the draws').
+inline VkRect2D scaled_rect(const int32_t* r, float s) {
+    int64_t x = std::max(0, r[0]), y = std::max(0, r[1]), w = std::max(0, r[2]), h = std::max(0, r[3]);
+    if (s == 1.0f) return {{int32_t(x), int32_t(y)}, {uint32_t(w), uint32_t(h)}};
+    int64_t x0 = std::llround(x * s), y0 = std::llround(y * s);
+    return {{int32_t(x0), int32_t(y0)}, {uint32_t(std::llround((x + w) * s) - x0), uint32_t(std::llround((y + h) * s) - y0)}};
+}
 
 VkDevice vk_device();
 bool vk_depth_clip_control();
@@ -212,6 +229,7 @@ void render_pass_log();
 void pass_end_only(VkCommandBuffer cb, int reason);  // draw_end_rendering without the pending clears
 bool pass_open_on(const Targets& t);
 VkExtent2D pass_extent();
+float pass_scale();  // the open pass's targets' render scale (viewports, scissors, gl_FragCoord)
 void pass_begin(VkCommandBuffer cb, const Targets& t);
 void pass_mark_written(uint32_t bits);
 // nvn_mask_clear.cpp: colour target `slot` of the open pass on `t` cleared to `rgba` in `rect`, only the channels in

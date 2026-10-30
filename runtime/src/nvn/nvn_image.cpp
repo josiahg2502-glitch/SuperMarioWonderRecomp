@@ -3,9 +3,11 @@
 #include <cstdlib>
 #include <map>
 #include <memory>
+#include <string>
 #include <tuple>
 
 #include "nvn_vk.h"
+#include "platform.h"
 
 namespace nx::nvn {
 
@@ -59,7 +61,32 @@ bool image_supported(VkImageCreateInfo& ci, uint32_t nvn_format) {
     return false;
 }
 
+// The render scale a texture's image gets: render targets that are 2D, 2D array or multisample, not storage images
+// (IMAGE, 0x4: a compute dispatch covers the game's pixels only) and not tiny (1x1 exposure and LUT targets gain
+// nothing). Render targets: COMPRESSIBLE (0x8), the window's (DISPLAY, 0x1), or anything in a COMPRESSIBLE pool (0x80):
+// Wonder keeps all its targets in one (flags 0x2a1), its dynamic-resolution ones without the texture flag (a
+// 1920x1080 R11G11B10F, 960x540..831x468 R8), and nothing the CPU fills. Everything else stays 1.
+float scale_of(const Texture& t) {
+    float s = render_scale();
+    if (s == 1.0f || (t.flags & 0x4) || t.width < 16 || t.height < 16) return 1.0f;
+    if (!(t.target == 1 || t.target == 4 || t.target == 5 || t.target == 6)) return 1.0f;
+    if (t.flags & (0x8 | 0x1)) return s;
+    const MemoryPool* pool = get<MemoryPool>(t.pool);
+    return pool && (pool->flags & 0x80) ? s : 1.0f;
+}
+
 }  // namespace
+
+float render_scale() {
+    static const float s = [] {
+        std::string v = plat::setting("render_scale");  // NX_RENDER_SCALE on PC
+        // Android's render_scale (0.25..1) sizes its swapchain (platform_android.cpp): below 1 is off here.
+        float f = v.empty() ? 1.0f : std::clamp(std::strtof(v.c_str(), nullptr), 1.0f, 4.0f);
+        if (f != 1.0f) log("nvn/vk: render scale %g: render targets made %g times the game's size", f, f);
+        return f;
+    }();
+    return s;
+}
 
 // The VkImage behind an NVN texture, made on first use. NVN texture targets (GL order): 0 1D, 1 2D, 2 3D, 3 1D array,
 // 4 2D array, 5 2D multisample, 6 2D multisample array, 7 rectangle, 8 cube map, 9 cube map array, 10 buffer.
@@ -100,8 +127,17 @@ GpuImage* image_of(uint64_t guest) {
                 t->image = shared;
                 return shared.get();
             }
-    if ((t->image = reuse_image(*t))) return t->image.get();
+    const float scale = scale_of(*t);
+    if (render_scale() != 1.0f && scale == 1.0f && t->width >= 640 && t->height >= 360 && (t->target == 1 || t->target == 4)) {
+        static int logged = 0;  // what NX_RENDER_SCALE leaves at the game's size, among screen-sized textures
+        const MemoryPool* pool = get<MemoryPool>(t->pool);
+        if (logged++ < 10)
+            log("nvn/vk: %ux%u texture %llx (flags %#x, format %#x, pool flags %#x) not render-scaled", t->width,
+                t->height, (unsigned long long)guest, t->flags, t->format, pool ? pool->flags : 0xFFFFFFFFu);
+    }
+    if ((t->image = reuse_image(*t)) && t->image->scale == scale) return t->image.get();
     auto img = std::make_shared<GpuImage>();
+    img->scale = scale;
     img->format = bc_host_decode(t->format) ? bc_decoded_format(t->format) : vk_format(t->format);  // nvn_bc.cpp
     img->nvn_format = t->format;
     if (t->format == 0x1 && t->pool_swizzle == 0x02010101u) {
@@ -114,8 +150,8 @@ GpuImage* image_of(uint64_t guest) {
                   : aspect == 2 ? VK_IMAGE_ASPECT_STENCIL_BIT
                                 : VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     bool one_d = vk_1d_images() && (t->target == 0 || t->target == 3);  // else 2D images of height 1 (G8)
-    img->width = std::max(1u, t->width);
-    img->height = (t->target == 0 || t->target == 3) && !one_d ? 1u : std::max(1u, t->height);
+    img->width = std::max(1u, uint32_t(std::lround(t->width * scale)));
+    img->height = (t->target == 0 || t->target == 3) && !one_d ? 1u : std::max(1u, uint32_t(std::lround(t->height * scale)));
     img->levels = std::max(1u, t->levels);
     uint32_t depth = std::max(1u, t->target == 3 && !one_d && t->depth <= 1 ? t->height : t->depth);  // GL-style layers
     bool is3d = t->target == 2, cube = t->target == 8 || t->target == 9;

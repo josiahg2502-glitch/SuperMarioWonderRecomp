@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <psapi.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -38,9 +39,13 @@ double memory_limit_gb(const char* env) {
 #ifndef NX_MEMGUARD_STANDALONE
 
 void start_memory_guard() {
-    const double gb = memory_limit_gb(std::getenv("NX_MEM_LIMIT_GB"));
+    // Render targets scaled by NX_RENDER_SCALE (s) are device memory the driver commits in our name (NVIDIA: it
+    // counts in PrivateUsage): allowed on top of the limit, 2 GB per unit of s^2 - 1 (2x peaked 5.1 GB above 1x
+    // through the opening, the map and course 1-1). The guard is for host leaks, not for the player's resolution.
+    const double rs = std::clamp(std::atof(setting("render_scale").c_str()), 1.0, 4.0);
+    const double gb = memory_limit_gb(std::getenv("NX_MEM_LIMIT_GB")) + 2.0 * (rs * rs - 1.0);
     const uint64_t limit = uint64_t(gb * double(1ull << 30));
-    log("memory: guard on, limit %.1f GB (NX_MEM_LIMIT_GB)", gb);
+    log("memory: guard on, limit %.1f GB (NX_MEM_LIMIT_GB%s)", gb, rs > 1.0 ? ", plus render scale" : "");
     std::thread([limit, gb] {
         uint64_t ticks = 0, peak = 0;
         for (;;) {

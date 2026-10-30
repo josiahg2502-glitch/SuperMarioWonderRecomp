@@ -224,7 +224,10 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
     // The part of the target the clear covers: the scissor (pass coordinates, as the draws') within the target.
     VkRect2D rect{{0, 0}, full};
     if (!no_scissor && replay::g_state.has_scissor) {
-        const int32_t* s = replay::g_state.scissor;
+        const int32_t* g = replay::g_state.scissor;
+        const float k = img->scale;  // the game's pixels -> the target's
+        const int32_t s[4] = {int32_t(std::lround(g[0] * k)), int32_t(std::lround(g[1] * k)),
+                              int32_t(std::lround(g[2] * k)), int32_t(std::lround(g[3] * k))};
         int64_t x0 = std::max(0, s[0]), y0 = std::max(0, s[1]);
         int64_t x1 = std::min<int64_t>(int64_t(s[0]) + std::max(0, s[2]), full.width);
         int64_t y1 = std::min<int64_t>(int64_t(s[1]) + std::max(0, s[3]), full.height);
