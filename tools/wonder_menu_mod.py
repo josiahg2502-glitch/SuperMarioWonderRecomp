@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Builds the recomp's own entries into Wonder's menus as a RomFS mod (docs/MENU.md).
 
-Two buttons in the pause menu, under "Exit Course": "Quit Game" and "Recomp Settings". Each is the game's own button
+Two buttons in the pause menu, under "Exit Course", and in the world map's menu, next to Save and Return to
+Title: "Quit Game" and "Recomp Settings". Each is the game's own button
 (a copy of the L_BtnExit part, same look and animations) with its label in every language, and reports a new
 PauseResult value (QuitToDesktop, RecompOption) the runtime acts on (games/wonder/menu.cpp). Recomp Settings opens the
 game's Settings screen with the recomp's options in its rows: their texts go into GameMsg/Option.msbt.
 
 Reads the RomFS from private/wonder/extract/romfs and writes private/wonder/mods/recomp-menu/romfs/:
-  Layout/Pause.Nin_NX_NVN.blarc.zs   the pause layout with the L_QuitBtn pane
+  Layout/Pause.Nin_NX_NVN.blarc.zs   the pause layout with the L_QuitBtn and L_RecompBtn panes
+  Layout/MainMenu.Nin_NX_NVN.blarc.zs the world map menu's layout with the same two
   Pack/Bootup.Nin_NX_NVN.pack.zs     the pause screen's button table with the QuitToDesktop button
   Mals/<lang>.Product.120.sarc.zs    the buttons' labels (LayoutMsgRef/PauseRef.msbt), the options' texts
                                      (GameMsg/Option.msbt)
@@ -34,6 +36,10 @@ RECOMP_ENUM = "RecompOption"
 BUTTON_Y = {"L_RetryBtn": 95.0, "L_BtnExit": -25.0, QUIT_PANE: -145.0, RECOMP_PANE: -265.0}
 ICON_ROW_Y = -445.0
 ICON_PANES = ("L_PlayerChangeBtn", "L_OptionBtn", "L_HelpBtn", "L_AmiiboBtn")
+# The world map's menu: Save and Return to Title (448 wide) side by side with the recomp's two, copies of
+# L_TitleBtn: Save | Recomp Settings over Return to Title | Quit Game.
+MAIN_MENU_POS = {"L_SaveBtn": (-240.0, -76.0), QUIT_PANE: (240.0, -76.0), "L_TitleBtn": (-240.0, -204.0),
+                 RECOMP_PANE: (240.0, -204.0)}
 QUIT_TEXT = {
     "USen": "Quit Game", "EUen": "Quit Game", "USfr": "Quitter le jeu", "EUfr": "Quitter le jeu",
     "USes": "Salir del juego", "EUes": "Salir del juego", "EUde": "Spiel beenden", "EUit": "Esci dal gioco",
@@ -57,7 +63,7 @@ OPTION_TEXT = [
     ("RecompFastForward", "Fast-Forward (Tab or Right Stick Click)", ["Off", "Hold", "Toggle"]),
     ("RecompFastSpeed", "Fast-Forward Speed", ["2x", "3x", "4x", "As Fast as Possible"]),
     ("RecompFastLoads", "Faster Menus, Saves and Loads", ["Off", "On"]),
-    ("RecompSaveAnywhere", "Save Anywhere (Pause Menu)", ["Off", "On"]),
+    ("RecompSaveAnywhere", "Save Before Quitting (Quit Game)", ["Off", "On"]),
     ("RecompQuitButton", "Quit Game Button in Pause Menu", ["Off", "On"]),
     ("RecompAutoUpdate", "Automatic Updates", ["Off", "On"]),
 ]
@@ -285,6 +291,33 @@ def patch_pause_layout(d):
     return bytes(out)
 
 
+def patch_main_menu_layout(d):
+    """L_RecompBtn and L_QuitBtn in the world map's menu: copies of L_TitleBtn, laid out with Save and Return to
+    Title in two columns (MAIN_MENU_POS)."""
+    out = bytearray(d)
+    src = None
+    for o, magic, size in flyt_sections(d):
+        name = pane_name(d, o) if magic == b"prt1" else None
+        if name == "L_TitleBtn":
+            src = (o, size)
+        if name in MAIN_MENU_POS:
+            struct.pack_into("<ff", out, o + 0x2C, *MAIN_MENU_POS[name])
+        if name in (QUIT_PANE, RECOMP_PANE):
+            raise SystemExit("the world map menu layout already has " + name)
+    assert src, "L_TitleBtn not found in MainMenu.bflyt"
+    o, size = src
+    clones = b""
+    for pane in (RECOMP_PANE, QUIT_PANE):
+        clone = bytearray(out[o:o + size])
+        clone[0xC:0xC + 24] = pane.encode().ljust(24, b"\0")
+        struct.pack_into("<ff", clone, 0x2C, *MAIN_MENU_POS[pane])
+        clones += clone
+    out[o + size:o + size] = clones
+    struct.pack_into("<I", out, 0xC, len(out))
+    struct.pack_into("<H", out, 0x10, struct.unpack_from("<H", d, 0x10)[0] + 2)
+    return bytes(out)
+
+
 # ---- MSBT -------------------------------------------------------------------------------------------------------
 
 def msbt_add(d, label, text):
@@ -381,14 +414,15 @@ def main():
     growth = {}
 
     def mod(name, edits, member_heap=0):
-        """edits: {member: function(old bytes) -> new bytes}."""
+        """edits: {member: function(old bytes) -> new bytes}; member_heap: an int, or {member: int}."""
         arc = unzs(os.path.join(romfs, name))
         files = {}
         for member, edit in edits.items():
             old = sarc_get(arc, member)
             files[member] = edit(old)
-            if member_heap:  # a pack member is a resource of its own, whose entry also sizes what it is parsed into
-                growth[member] = len(files[member]) - len(old) + member_heap
+            heap = member_heap.get(member, 0) if isinstance(member_heap, dict) else member_heap
+            if heap:  # a pack member is a resource of its own, whose entry also sizes what it is parsed into
+                growth[member] = len(files[member]) - len(old) + heap
         new = sarc_replace(arc, files)
         growth[name[:-3]] = len(new) - len(arc)
         write_zs(os.path.join(out, name), new)
@@ -407,15 +441,32 @@ def main():
         return byml_write(version, screen)
 
     # The pause screen's entry (19136 for a 4660-byte file) is its parsed tables too: room for more buttons.
+    def add_main_menu_buttons(data):
+        version, screen = byml_read(data)
+        assert byml_read(byml_write(version, screen))[1] == screen, "BYML round trip changed the world map menu"
+        buttons = screen["ButtonInfoGenerateTable"]
+        title = next(b for b in buttons if b["PaneName"] == "L_TitleBtn")
+        at = buttons.index(title) + 1
+        decide = {k: v for k, v in title["DecideInfoGenerateTable"].items() if k != "IsSetGameData"}
+        for pane, unique, enum in ((QUIT_PANE, "QuitBtn", QUIT_ENUM), (RECOMP_PANE, "RecompBtn", RECOMP_ENUM)):
+            buttons.insert(at, {**title, "PaneName": pane, "UniqueName": unique,
+                                "DecideInfoGenerateTable": {**decide, "EnumValue": enum}})
+        return byml_write(version, screen)
+
+    # Each screen's entry is its parsed tables too: room for more buttons.
     mod("Pack/Bootup.Nin_NX_NVN.pack.zs",
-        {"Gyml/UIExtraScreenParam/Pause.game__UIExtraScreenParam.bgyml": add_button}, member_heap=0x4000)
+        {"Gyml/UIExtraScreenParam/Pause.game__UIExtraScreenParam.bgyml": add_button,
+         "Gyml/UIExtraScreenParam/MainMenu.game__UIExtraScreenParam.bgyml": add_main_menu_buttons},
+        member_heap={"Gyml/UIExtraScreenParam/Pause.game__UIExtraScreenParam.bgyml": 0x4000,
+                     "Gyml/UIExtraScreenParam/MainMenu.game__UIExtraScreenParam.bgyml": 0x10000})
+    mod("Layout/MainMenu.Nin_NX_NVN.blarc.zs", {"blyt/MainMenu.bflyt": patch_main_menu_layout})
 
     for f in sorted(os.listdir(os.path.join(romfs, "Mals"))):
         lang = f.split(".")[0]
         if lang not in QUIT_TEXT:
             print("skipped", f, "(no translation)")
             continue
-        def pause_texts(m, lang=lang):
+        def pause_texts(m, lang=lang):  # the world map's menu takes the same labels
             m = msbt_add(m, QUIT_PANE + "-T_BtnName", QUIT_TEXT[lang])
             return msbt_add(m, RECOMP_PANE + "-T_BtnName", RECOMP_TEXT[lang])
 
@@ -426,7 +477,8 @@ def main():
                     m = msbt_add(m, f"{name}_Selection{k:02d}", text)
             return m
 
-        mod("Mals/" + f, {"LayoutMsgRef/PauseRef.msbt": pause_texts, "GameMsg/Option.msbt": option_texts})
+        mod("Mals/" + f, {"LayoutMsgRef/PauseRef.msbt": pause_texts, "LayoutMsgRef/MainMenuRef.msbt": pause_texts,
+                          "GameMsg/Option.msbt": option_texts})
 
     name = "System/Resource/ResourceSizeTable.Product.120.rsizetable.zs"
     write_zs(os.path.join(out, name), rstb_grow(unzs(os.path.join(romfs, name)), growth))

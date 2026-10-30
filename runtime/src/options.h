@@ -13,7 +13,7 @@ enum Option : int {
     kFastForward,  // 0: off, 1: hold Tab / ZL+ZR+R-stick, 2: the same keys toggle it
     kFastSpeed,    // 0: 2x, 1: 3x, 2: 4x, 3: as fast as possible
     kFastLoads,    // faster menus, saves and loads: 0 off, 1 on
-    kSaveAnywhere, // 0 off, 1 on: the pause menu's Save button saves in a course too
+    kSaveAnywhere, // 0 off, 1 on: Quit Game leaves the course first, so the game saves, then quits
     kQuitButton,   // 0 off, 1 on: the pause menu's Quit Game button quits
     kAutoUpdate,   // 0 off, 1 on: updater.cpp checks for and installs new releases
     kCount
@@ -32,6 +32,8 @@ float render_scale_of(int v);
 // The vsync thread calls it once a tick; fast() is its last answer, for other threads.
 int64_t fast_tick_ns();
 bool fast();
+// Quit Game with Save Anywhere on: the process ends once the game has committed its save (hle_fs.cpp).
+extern std::atomic<bool> g_quit_after_save;
 // Something worth speeding through has happened (a menu button chosen, a file read or written).
 void busy(int64_t for_ns);
 

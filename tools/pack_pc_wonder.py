@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Pack the Wonder data a Windows PC needs into one zip (docs/nvn/WINDOWS-PORT.md, W0).
 
-Extracted into the repository root on the PC, it recreates private/wonder as the Mac has it:
+Extracted into the repository root on the PC, it recreates private/wonder as the Mac has it; dropped on a release's
+Install.bat (tools/pack_release.py), it becomes that install's data\ folder:
 
     private/wonder/exefs/{main,sdk,main.npdm}   the executables, to recompile on the PC (python -m recomp)
     private/wonder/analysis/{main,sdk}.bin      the modules as loaded (tools/nso2bin.py output)
@@ -9,6 +10,7 @@ Extracted into the repository root on the PC, it recreates private/wonder as the
     private/wonder/spirv/<hash>.spv             the offline shader translation
     private/wonder/spirv/results.tsv            the harness's records (storage buffer offsets; the first PC zip lacked it)
     private/wonder/fonts/shared_5.ttf           the button glyphs
+    private/wonder/mods/recomp-menu/            the recomp's menu entries (tools/wonder_menu_mod.py)
 
 The generated C++ (private/wonder/gen, 1.4 GB) is not packed: recompiling on the PC takes about 6 minutes and
 gives the same files. Everything comes from the owner's own dump; never share the result.
@@ -31,6 +33,17 @@ def pc_entries(root):
             sys.exit(f"missing {p}")
         yield p, "exefs/" + f
     yield from entries(root)
+    # The recomp's menu entries (tools/wonder_menu_mod.py output, made from this RomFS): Recomp Settings, Quit Game.
+    for name in ("recomp-menu", "-recomp-menu"):
+        mod = os.path.join(root, "mods", name)
+        if os.path.isdir(mod):
+            for d, _, files in os.walk(mod):
+                for f in sorted(files):
+                    p = os.path.join(d, f)
+                    yield p, "mods/recomp-menu/" + os.path.relpath(p, mod).replace(os.sep, "/")
+            break
+    else:
+        sys.exit("missing mods/recomp-menu (run tools/wonder_menu_mod.py first)")
 
 
 def main():

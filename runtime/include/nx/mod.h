@@ -6,7 +6,7 @@
 // nx_mod_init. A mod is built against these headers (runtime/include) with the same compiler as the recomp (clang-cl
 // on Windows); docs/MODS.md has a worked example (examples/mods/hello).
 //
-// What a mod can do through the API:
+// The API pointer stays valid for the whole run, so a mod may keep it. What a mod can do through it:
 //   - replace a game function: hook(offset in main, replacement) returns the game's own function, which the
 //     replacement may call. Every function the game reaches through a function pointer (virtual functions,
 //     callbacks, the enum and UI tables) can be replaced; a direct call inside the recompiled code goes straight to

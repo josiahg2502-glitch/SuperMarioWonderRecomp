@@ -18,6 +18,7 @@
 namespace nx::opt {
 
 std::atomic<int> g_value[kCount];
+std::atomic<bool> g_quit_after_save{false};
 
 namespace {
 

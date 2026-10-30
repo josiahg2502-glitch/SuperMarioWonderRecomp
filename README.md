@@ -81,8 +81,9 @@ The details are in the GitHub milestones.
 - **Character-select blur:** needs a reference from a real console.
 - **Android rendering bugs and performance:** hand-off notes in [docs/nvn/android-perf/](docs/nvn/android-perf/).
 - **Linux:** see [Platforms](#platforms).
-- **Toads' eyes:** Toad, Toadette and the other Toads show only one eye. Wrap modes, culling and texture uploads
-  are ruled out. Suspect: the ~500 shaders whose sampler type the offline translator assumed was 2D.
+- **Toads' eyes:** Toad, Toadette and the other Toads show only one eye. Wrap modes, culling, texture uploads,
+  stencil, depth bias and the EQUAL depth tolerance (`NX_EQUAL_SLACK` 1 to 256: no change, or worse) are ruled out.
+  Suspect: the ~500 shaders whose sampler type the offline translator assumed was 2D.
 
 ### Mods
 
@@ -101,11 +102,17 @@ How mods combine:
 - A folder whose name starts with `-` is turned off.
 - `nx.log` lists each mod and every file taken from one.
 
-ExeFS patches (IPS/cheats) do not apply: the code is recompiled, not patched.
+Beyond files, a mod's folder can hold:
 
-The recomp's own menu entries (the pause menu's "Quit Game") are a mod too, built from your RomFS once after
-extracting it: `python tools/wonder_menu_mod.py` writes `private/wonder/mods/recomp-menu/` (needs `zstandard`).
-How it works: [docs/MENU.md](docs/MENU.md).
+- **Code mods:** a `.dll` exporting `nx_mod_init`. It can replace game functions, call any of them and read or write
+  game memory. The API, its limits and a worked example (`examples/mods/hello`) are in [docs/MODS.md](docs/MODS.md).
+- **ExeFS patches:** `exefs/<build id>.ips` or `atmosphere/exefs_patches/<name>/<build id>.ips`, as Switch mods ship
+  them. Their bytes in main's data apply at start. Their bytes in main's code are skipped and logged: the code is
+  recompiled ahead of time, so a patch to it needs a recompile with it applied.
+
+The recomp's own menu entries (the pause menu's "Quit Game" and "Recomp Settings") are a mod too, built from your
+RomFS once after extracting it: `python tools/wonder_menu_mod.py` writes `private/wonder/mods/recomp-menu/` (needs
+`zstandard`). How it works: [docs/MENU.md](docs/MENU.md).
 
 ### Quality bar
 
@@ -115,15 +122,17 @@ The bar this fork holds itself to, and where it stands:
 |---|---|
 | Native, beats emulation | Yes: recompiled CPU code, NVN on Vulkan, no emulator |
 | Steady 60 fps, even pacing | 60 fps. Frames are paced on the display's vertical blank (Windows). Pipelines compile off the render thread and ASTC decodes on the GPU (`NX_ASTC_CPU=1` for the old CPU path). |
-| 4K, render scale above native | `NX_RENDER_SCALE` (1 to 4): the game's render targets at that multiple, 2 renders 3840x2160. Not yet in the game's menus |
-| Widescreen/ultrawide up to 32:9, adaptive HUD | Open |
-| Easy install | Open: needs `dev.ps1`, a build and `tools/pack_pc_wonder.py` |
-| Built-in updater | Open |
-| Settings in the game's own menus | Started: the pause menu has the recomp's "Quit Game" button ([docs/MENU.md](docs/MENU.md)). The other options are environment variables or `private/wonder/user/settings.txt` lines for now |
-| Mod support | RomFS mods (above). Code mods: open |
-| Steam Deck (Proton, 1280x800) | Untested. The Windows build has no Proton-specific code. |
-| Fast-forward | Hold Tab (no menu toggle yet) |
-| Save anywhere, faster animations, quit from menu | Quit from the pause menu: yes. Save anywhere, faster animations: open |
+| 4K, render scale above native | Recomp Settings > Render Resolution: native, 1.5x, 2x (4K), 3x, 4x, from the next start (`NX_RENDER_SCALE` also works) |
+| Widescreen/ultrawide up to 32:9, adaptive HUD | Not planned for now |
+| Easy install | Release zip + `Install.bat` (drag the data zip onto it), see [Windows](#windows). A first start with no save works. |
+| Built-in updater | Yes: checks this fork's newest GitHub release at start and installs it for the next start (Recomp Settings > Automatic Updates). No release is published yet. |
+| Settings in the game's own menus | "Recomp Settings" in the pause menu and the world map's menu: the game's own Settings screen with the recomp's options ([docs/MENU.md](docs/MENU.md)) |
+| Mod support | RomFS mods, code mods (`.dll`), the data part of exefs `.ips` patches (above) |
+| Steam Deck (Proton, 1280x800) | Not planned for now |
+| Fast-forward | Tab or the right stick click; Off / Hold / Toggle and 2x to unlimited in Recomp Settings |
+| Faster menus, saves and loads | Recomp Settings: runs at 4x while a load or save is in progress and right after a menu choice |
+| Save anywhere | Partly: Wonder keeps a course's progress only once the course is left, and mid-course states can't be saved in this recomp. "Save Before Quitting" makes Quit Game save first: in a course it leaves the course the way Exit Course does, on the world map it runs the menu's Save, then it quits. |
+| Quit to desktop from the game's menu | "Quit Game" in the pause menu and the world map's menu (can be turned off in Recomp Settings) |
 
 ### Windows
 
@@ -132,6 +141,17 @@ described in [docs/nvn/WINDOWS-PORT.md](docs/nvn/WINDOWS-PORT.md) and [WINDOWS-P
 the PC quality work in [docs/nvn/pc-quality/](docs/nvn/pc-quality/). `dev.ps1` sets up the build environment
 (Visual Studio Build Tools, clang, CMake, Ninja, Vulkan SDK) and `tools/pack_pc_wonder.py` packs your own data for
 the PC. The recompile, shader and build steps are the same as in the macOS section below.
+
+**Install (a release):** `tools/pack_release.py` makes `dist/SuperMarioWonderRecomp-<VERSION>-windows.zip` from a
+build: the program only, no game data. To install it:
+
+1. Unzip it anywhere with a short path.
+2. Drag your data zip (`tools/pack_pc_wonder.py`, from your own copy of the game, 1.2.0) onto `Install.bat`. It
+   unpacks into `data\` next to `wonder.exe`.
+3. Start `wonder.exe`. It finds `data\` by itself, and `NX_DATA_ROOT` still overrides it.
+
+To publish a version, raise `VERSION`, build, run `tools/pack_release.py` and attach the zip to a GitHub release
+tagged `v<VERSION>`: installed copies with Automatic Updates on pick it up at their next start.
 
 ### Android
 

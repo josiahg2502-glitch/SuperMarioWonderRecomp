@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(SwitchGamesRecomp C CXX)
-# The release version (VERSION): the updater compares it with GitHub's newest release.
+# The release version (VERSION): the updater compares it with GitHub's newest release. A generated header, so a new
+# version rebuilds only what includes it.
 file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" NX_VERSION LIMIT_COUNT 1)
-add_compile_definitions(NX_VERSION="${NX_VERSION}")
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/nx_version.h" CONTENT "#define NX_VERSION \"${NX_VERSION}\"\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -223,7 +225,7 @@ elseif(APPLE)
 else()
     add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/memguard_win.cpp
         runtime/src/updater_win.cpp)
-    target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_SDK}/Include")
+    target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_SDK}/Include" "${CMAKE_BINARY_DIR}")
     target_link_libraries(${NX_GAME} PRIVATE game_main game_sdk xinput xaudio2 ole32 psapi winhttp)
     # The runtime uses the portable C library (getenv, fopen, ...) on every host: no "_s" variants.
     target_compile_definitions(${NX_GAME} PRIVATE _CRT_SECURE_NO_WARNINGS _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)

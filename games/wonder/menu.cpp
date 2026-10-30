@@ -6,6 +6,8 @@
 // function-table entry replaces one for the whole game. The pause screen turns the chosen button's name into its value
 // with the type's from-string callback when the button is chosen (not before): that call is the moment to quit.
 //
+// The world map's menu has the same two buttons, reporting the same names through game::sequence::MainMenuResult.
+//
 // Pause menu "Recomp Settings": reports "RecompOption", which opens the game's own Settings screen (as "Option" does)
 // with the recomp's options (options.h) in its 8 rows instead of the game's. The screen builds each row's texts from
 // a table of option-type names ("<name>_Subject", "<name>_Selection00"... in GameMsg/Option.msbt, where the tool adds
@@ -28,7 +30,8 @@ namespace nx::wonder {
 namespace {
 
 // main (1.2.0) offsets.
-constexpr uint64_t kPauseResultFromString = 0x1d3415c;  // bool (int* out, const char** name)
+constexpr uint64_t kPauseResultFromString = 0x1d3415c;     // bool (int* out, const char** name)
+constexpr uint64_t kMainMenuResultFromString = 0x1d342c8;  // the world map's menu: the same
 constexpr uint64_t kOptionOpen = 0x1d88ecc;             // (screen): reads the options into the row values
 constexpr uint64_t kOptionLeft = 0x1d8a920;             // (screen): the cursor's row, previous choice
 constexpr uint64_t kOptionRight = 0x1d8aad4;            // (screen): next choice
@@ -48,7 +51,7 @@ const char* const kRecompNames[kRows] = {"RecompRenderScale", "RecompFullscreen"
                                          "RecompFastSpeed",   "RecompFastLoads",  "RecompSaveAnywhere",
                                          "RecompQuitButton",  "RecompAutoUpdate"};
 
-Fn g_pause_result_from_string, g_open, g_left, g_right, g_decide, g_row;
+Fn g_pause_result_from_string, g_main_menu_result_from_string, g_open, g_left, g_right, g_decide, g_row;
 uint64_t g_base;
 bool g_recomp_next = false;    // the next Settings screen is the recomp's page
 uint64_t g_recomp_screen = 0;  // the Settings screen showing it
@@ -64,28 +67,48 @@ void use_tables(bool recomp) {
     }
 }
 
-// x1 is the pause screen's copy of the chosen button's name (a stack buffer: char*, then its capacity). After this
-// callback the screen stores the hash of that text in GameData PauseResult, and the pause sequence picks its branch
-// by it: so the recomp's names are rewritten in the buffer to the game's own ("Option", "Continue").
-void pause_result_from_string(CPU& c) {
+// A menu (the pause menu in a course, the world map's) and the names of its own choices the recomp's turn into.
+struct Menu {
+    const char* what;
+    Fn* game;           // the enum's from-string callback
+    const char* close;  // closes the menu
+    const char* leave;  // the game saves: Exit Course in a course, Save on the world map
+};
+const Menu kPause = {"pause menu", &g_pause_result_from_string, "Continue", "Out"};
+const Menu kMainMenu = {"world map menu", &g_main_menu_result_from_string, "Close", "Save"};
+
+// x1 is the menu screen's copy of the chosen button's name (a stack buffer: char*, then its capacity). After this
+// callback the screen stores the hash of that text in GameData (PauseResult, MainMenuResult), and the menu's sequence
+// picks its branch by it: so the recomp's names are rewritten in the buffer to the game's own.
+void menu_result_from_string(CPU& c, const Menu& m) {
     char* name = reinterpret_cast<char*>(ld<uint64_t>(c.x[1]));
     uint32_t capacity = ld<uint32_t>(c.x[1] + 8);
     if (opt::get(opt::kFastLoads)) opt::busy(600'000'000);  // the menu's out animation and what follows
     const char* as = nullptr;
     if (std::strcmp(name, "QuitToDesktop") == 0) {
-        if (opt::get(opt::kQuitButton)) {
-            log("menu: Quit Game chosen in the pause menu");
+        if (!opt::get(opt::kQuitButton)) {
+            as = m.close;  // the option is off: the button closes the menu
+        } else if (opt::get(opt::kSaveAnywhere)) {
+            // Save Before Quitting: Wonder keeps a course's progress when the course is left, so Quit Game leaves it
+            // the way Exit Course does (the game asks, then saves), or saves on the world map, and the process ends
+            // once the save is committed (hle_fs.cpp).
+            log("menu: Quit Game chosen in the %s: saving first", m.what);
+            opt::g_quit_after_save = true;
+            as = m.leave;
+        } else {
+            log("menu: Quit Game chosen in the %s", m.what);
             plat::exit_process(0);  // what closing the window does
         }
-        as = "Continue";  // the option is off: the button closes the menu
     } else if (std::strcmp(name, "RecompOption") == 0) {
-        log("menu: Recomp Settings chosen");
+        log("menu: Recomp Settings chosen in the %s", m.what);
         g_recomp_next = true;
         as = "Option";
     }
     if (as && std::strlen(as) < capacity) std::strcpy(name, as);
-    g_pause_result_from_string(c);
+    (*m.game)(c);
 }
+void pause_result_from_string(CPU& c) { menu_result_from_string(c, kPause); }
+void main_menu_result_from_string(CPU& c) { menu_result_from_string(c, kMainMenu); }
 
 void available(uint64_t screen) {  // every recomp row can be changed
     st<uint8_t>(screen + kVoiceOff, 0);
@@ -156,6 +179,7 @@ void menu_init() {
         g_game_counts[k] = ld<uint32_t>(g_base + kOptionCounts + 4 * k);
     }
     g_pause_result_from_string = swap(kPauseResultFromString, pause_result_from_string);
+    g_main_menu_result_from_string = swap(kMainMenuResultFromString, main_menu_result_from_string);
     g_open = swap(kOptionOpen, option_open);
     g_left = swap(kOptionLeft, option_left);
     g_right = swap(kOptionRight, option_right);

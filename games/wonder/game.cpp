@@ -11,9 +11,13 @@ const game::Info game::kInfo = {"wonder", "Super Mario Bros. Wonder", 0x01001510
 
 namespace wonder {
 void menu_init();
+void seed_new_save();
 }
 
-void game::after_init() { wonder::menu_init(); }
+void game::after_init() {
+    wonder::seed_new_save();
+    wonder::menu_init();
+}
 void game::renderer_start() {}
 void game::first_frame() {}
 

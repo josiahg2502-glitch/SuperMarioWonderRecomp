@@ -134,10 +134,11 @@ void load_code_mods() {
                     log("mods: %s: %s", utf8(p).c_str(), lib ? "no nx_mod_init, skipped" : "could not be loaded");
                     continue;
                 }
-                ModApi mine = api;
-                mine.mod_dir = (new std::string(utf8(m)))->c_str();  // kept for the process's life
+                // The mod may keep the pointer: its API and folder name live as long as the process.
+                ModApi* mine = new ModApi(api);
+                mine->mod_dir = (new std::string(utf8(m)))->c_str();
                 log("mods: %s: code mod loaded", utf8(p).c_str());
-                init(&mine);
+                init(mine);
             }
         }
     }

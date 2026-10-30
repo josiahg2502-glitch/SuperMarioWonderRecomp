@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -27,6 +28,8 @@
 namespace fs = std::filesystem;
 
 namespace nx {
+
+void backtrace(CPU& c);  // kernel_watch.cpp
 
 namespace {
 
@@ -190,7 +193,13 @@ void Unmount(CPU& c) {
     c.x[0] = kOk;
 }
 
-void Commit(CPU& c) { c.x[0] = kOk; }
+void Commit(CPU& c) {
+    c.x[0] = kOk;
+    if (opt::g_quit_after_save) {  // Quit Game with Save Anywhere on: the game has saved
+        log("fs: save committed, quitting");
+        plat::exit_process(0);
+    }
+}
 void EnableGlobalFileDataCache(CPU& c) { c.x[0] = kOk; }
 void DisableGlobalFileDataCache(CPU& c) { c.x[0] = kOk; }
 
@@ -385,6 +394,10 @@ void WriteFile(CPU& c) {  // (FileHandle, s64 off, const void* buf, size_t size,
     fwrite(reinterpret_cast<const void*>(c.x[2]), 1, c.x[3], file->f);
     fflush(file->f);  // positional reads bypass the FILE buffer (saves only: rare and small)
     opt::busy(1'000'000'000);  // a save: its animation runs faster with the faster-saves option
+    if (std::getenv("NX_TRACE_SAVE")) {
+        log("fs: write %s, %llu bytes", file->path.c_str(), (unsigned long long)c.x[3]);
+        backtrace(c);
+    }
     c.x[0] = kOk;
 }
 

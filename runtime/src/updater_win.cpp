@@ -3,8 +3,8 @@
 // Windows zip and installs it next to the running exe: files in use (the exe) are renamed to *.old first, which
 // Windows allows, so the new version starts the next time the game does. The *.old files go at the next start.
 //
-// Never in a build folder (a developer's tree has CMakeCache.txt next to the exe), headless test runs or with
-// NX_NO_UPDATE=1.
+// Never in a build folder (a developer's tree has CMakeCache.txt next to the exe), headless test runs (unless
+// NX_UPDATE_CHECK=1) or with NX_NO_UPDATE=1.
 #include <windows.h>
 #include <winhttp.h>
 
@@ -20,9 +20,7 @@
 #include "options.h"
 #include "platform.h"
 
-#ifndef NX_VERSION
-#define NX_VERSION "0.0.0"
-#endif
+#include "nx_version.h"  // NX_VERSION, from VERSION (CMakeLists.txt)
 
 namespace nx {
 
@@ -152,7 +150,10 @@ void check() {
     fs::create_directories(staged, ec);
     std::ofstream(file, std::ios::binary).write(zip.data(), std::streamsize(zip.size()));
     // tar.exe (bsdtar, part of Windows 10 1803 and later) reads zips.
-    if (!run_hidden(L"tar.exe -xf \"" + file.wstring() + L"\" -C \"" + staged.wstring() + L"\"")) {
+    wchar_t sys[MAX_PATH];
+    GetSystemDirectoryW(sys, MAX_PATH);
+    if (!run_hidden(L"\"" + std::wstring(sys) + L"\\tar.exe\" -xf \"" + file.wstring() + L"\" -C \"" + staged.wstring() +
+                    L"\"")) {
         log("update: could not unpack %s", tag.c_str());
     } else {
         install(staged, dir);
@@ -167,8 +168,9 @@ void check() {
 void start_updater() {
     fs::path dir = exe_dir();
     const char* off = std::getenv("NX_NO_UPDATE");
-    bool on = opt::get(opt::kAutoUpdate) && !(off && *off == '1') && !plat::headless() &&
-              !fs::exists(dir / "CMakeCache.txt");
+    const char* force = std::getenv("NX_UPDATE_CHECK");  // tests: check even in a headless run
+    bool on = opt::get(opt::kAutoUpdate) && !(off && *off == '1') &&
+              ((force && *force == '1') || (!plat::headless() && !fs::exists(dir / "CMakeCache.txt")));
     std::thread([dir, on] {
         std::error_code ec;
         for (auto& f : fs::directory_iterator(dir, ec))  // left by the last update (the exe and its DLLs)
