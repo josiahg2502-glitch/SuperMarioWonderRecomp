@@ -114,11 +114,13 @@ The bar this fork holds itself to, and where it stands:
 | Requirement | State |
 |---|---|
 | Native, beats emulation | Yes: recompiled CPU code, NVN on Vulkan, no emulator |
-| Steady 60 fps, even pacing | 60 fps. Frames are paced on the display's vertical blank (Windows). Pipelines compile off the render thread. Software ASTC decode can still hitch while a level loads. |
+| Steady 60 fps, even pacing | 60 fps. Frames are paced on the display's vertical blank (Windows). Pipelines compile off the render thread and ASTC decodes on the GPU (`NX_ASTC_CPU=1` for the old CPU path). |
 | 4K, render scale above native | `NX_RENDER_SCALE` (1 to 4): the game's render targets at that multiple, 2 renders 3840x2160. Not yet in the game's menus |
-| Widescreen/ultrawide, adaptive HUD | Open |
+| Widescreen/ultrawide up to 32:9, adaptive HUD | Open |
+| Easy install | Open: needs `dev.ps1`, a build and `tools/pack_pc_wonder.py` |
+| Built-in updater | Open |
 | Settings in the game's own menus | Started: the pause menu has the recomp's "Quit Game" button ([docs/MENU.md](docs/MENU.md)). The other options are environment variables or `private/wonder/user/settings.txt` lines for now |
-| Mod support | RomFS mods (above) |
+| Mod support | RomFS mods (above). Code mods: open |
 | Steam Deck (Proton, 1280x800) | Untested. The Windows build has no Proton-specific code. |
 | Fast-forward | Hold Tab (no menu toggle yet) |
 | Save anywhere, faster animations, quit from menu | Quit from the pause menu: yes. Save anywhere, faster animations: open |
