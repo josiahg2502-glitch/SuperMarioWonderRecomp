@@ -181,8 +181,10 @@ bool init() {
         void* pNext = nullptr;
         VkBool32 fields[15] = {};
     } fport;
+    VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features.pNext = &f13;
-    void** tail = &f13.pNext;
+    f13.pNext = &f12;
+    void** tail = &f12.pNext;
     if (has_extension(dext, "VK_EXT_index_type_uint8")) {
         dexts.push_back("VK_EXT_index_type_uint8");
         *tail = &fu8, tail = &fu8.pNext;
@@ -196,6 +198,12 @@ bool init() {
         *tail = &fport, tail = &fport.pNext;
     }
     p_vkGetPhysicalDeviceFeatures2(g_physical, &features);
+    // Of 1.2, only mirror clamp to edge (NVN wrap modes 2-4, nvn_sampler.cpp): unenabled, the driver clamped instead,
+    // and the half of a mirrored texture past the edge (one of every Toad's eyes) was the edge texel.
+    VkBool32 mirror_clamp = f12.samplerMirrorClampToEdge;
+    f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, f12.pNext};
+    f12.samplerMirrorClampToEdge = mirror_clamp;
+    log("nvn/vk: samplerMirrorClampToEdge %u", mirror_clamp);
     g_depth_clip_control = fclip.depthClipControl;
     g_features = features.features;
     // NX_ASTC_DECODE=1|linear|srgb: the CPU decoder even where the GPU has ASTC (to compare the two on one GPU).

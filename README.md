@@ -81,6 +81,43 @@ The details are in the GitHub milestones.
 - **Character-select blur:** needs a reference from a real console.
 - **Android rendering bugs and performance:** hand-off notes in [docs/nvn/android-perf/](docs/nvn/android-perf/).
 - **Linux:** see [Platforms](#platforms).
+- **Toads' eyes:** Toad, Toadette and the other Toads show only one eye. Wrap modes, culling and texture uploads
+  are ruled out. Suspect: the ~500 shaders whose sampler type the offline translator assumed was 2D.
+
+### Mods
+
+RomFS mods (textures, models, music, text) load from `private/wonder/mods/<name>/`. Each mod needs a `romfs` folder
+in one of these places:
+
+- `romfs/`
+- `contents/010015100B514000/romfs/`
+- `atmosphere/contents/010015100B514000/romfs/` (the Atmosphère layout most Switch mods ship in, which can be
+  dropped in as is)
+
+How mods combine:
+
+- A mod's files replace the game's own, and new files are added.
+- Mods are checked in folder-name order, and the first mod with a file wins.
+- A folder whose name starts with `-` is turned off.
+- `nx.log` lists each mod and every file taken from one.
+
+ExeFS patches (IPS/cheats) do not apply: the code is recompiled, not patched.
+
+### Quality bar
+
+The bar this fork holds itself to, and where it stands:
+
+| Requirement | State |
+|---|---|
+| Native, beats emulation | Yes: recompiled CPU code, NVN on Vulkan, no emulator |
+| Steady 60 fps, even pacing | 60 fps. Frames are paced on the display's vertical blank (Windows). Pipelines compile off the render thread. Software ASTC decode can still hitch while a level loads. |
+| 4K, render scale above native | Open: the game renders at its own 1080p and the image is scaled to the window |
+| Widescreen/ultrawide, adaptive HUD | Open |
+| Settings in the game's own menus | Open: options are environment variables for now |
+| Mod support | RomFS mods (above) |
+| Steam Deck (Proton, 1280x800) | Untested. The Windows build has no Proton-specific code. |
+| Fast-forward | Hold Tab (no menu toggle yet) |
+| Save anywhere, faster animations, quit from menu | Open |
 
 ### Windows
 

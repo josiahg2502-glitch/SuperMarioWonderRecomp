@@ -1,11 +1,17 @@
 // Pipelines and sampled resources (nvn_pipeline.h). Everything is cached for the life of the process: layouts by
 // their bindings, pipelines by their full state, samplers by their state, views by (image, type).
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 
@@ -250,18 +256,108 @@ const ProgramLayout& program_layout(const std::vector<const ShaderInfo*>& stages
 
 // ---- graphics pipelines ---------------------------------------------------------------------------------------------
 
+namespace {
+
+// A graphics pipeline's create info and everything it points to, compiled on a worker thread: a driver compile is
+// 10-15 ms, and new objects brought dozens at once into one replay (1.8 s of stutter in a window of 60 frames).
+struct PipelineJob {
+    PipelineKey key;
+    VkPipelineCache cache = VK_NULL_HANDLE;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    std::vector<VkVertexInputAttributeDescription> attrs;
+    std::vector<VkVertexInputBindingDescription> binds;
+    VkPipelineVertexInputStateCreateInfo vi;
+    VkPipelineInputAssemblyStateCreateInfo ia;
+    VkPipelineViewportDepthClipControlCreateInfoEXT clip;
+    VkPipelineViewportStateCreateInfo vp;
+    VkPipelineRasterizationStateCreateInfo rs;
+    VkPipelineMultisampleStateCreateInfo ms;
+    VkPipelineDepthStencilStateCreateInfo ds;
+    VkPipelineColorBlendAttachmentState att[8]{};
+    VkPipelineColorBlendStateCreateInfo cb;
+    VkDynamicState dyn[7] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+                             VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+                             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_DEPTH_BIAS};
+    VkPipelineDynamicStateCreateInfo dy;
+    VkPipelineRenderingCreateInfo ri;
+    VkGraphicsPipelineCreateInfo ci;
+    VkPipeline result = VK_NULL_HANDLE;
+    VkResult made = VK_SUCCESS;
+    uint64_t ns = 0;
+    std::atomic<bool> done{false};
+
+    void build() {  // any thread: the pipeline cache is internally synchronized
+        const uint64_t t0 = plat::monotonic_ns();
+        made = p_vkCreateGraphicsPipelines(vk_device(), cache, 1, &ci, nullptr, &result);
+        ns = plat::monotonic_ns() - t0;
+        done.store(true, std::memory_order_release);
+    }
+};
+
+// Workers for PipelineJob::build: a quarter of the cores (1 to 4), the rest stay with the game's threads.
+void build_async(std::shared_ptr<PipelineJob> job) {
+    static std::mutex m;
+    static std::condition_variable cv;
+    static std::deque<std::shared_ptr<PipelineJob>> queue;
+    static std::once_flag started;
+    std::call_once(started, [] {
+        unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+        for (unsigned i = 0; i < n; i++)
+            std::thread([] {
+                for (;;) {
+                    std::shared_ptr<PipelineJob> j;
+                    {
+                        std::unique_lock lk(m);
+                        cv.wait(lk, [] { return !queue.empty(); });
+                        j = std::move(queue.front());
+                        queue.pop_front();
+                    }
+                    j->build();
+                }
+            }).detach();
+    });
+    {
+        std::lock_guard lk(m);
+        queue.push_back(std::move(job));
+    }
+    cv.notify_one();
+}
+
+}  // namespace
+
 VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout) {
     // By the key's bytes, as before, but hashed (nvn_pipeline.h) instead of a ~700-byte std::string built and
     // compared down a tree per draw; and the last entry first: consecutive draws mostly share their state.
     using Key = ByteKey<sizeof(PipelineKey)>;
     static std::unordered_map<Key, VkPipeline, ByteKeyHash> cache;
+    static std::unordered_map<Key, std::shared_ptr<PipelineJob>, ByteKeyHash> pending;
     static const std::pair<const Key, VkPipeline>* last = nullptr;  // entries are never erased
     if (last && std::memcmp(&key, last->first.b, sizeof key) == 0) return last->second;
     Key k;
     std::memcpy(k.b, &key, sizeof key);
     if (auto it = cache.find(k); it != cache.end()) return (last = &*it)->second;
+    // A pipeline still compiling: the draw is skipped (an object shows a frame or two late instead of the whole
+    // replay stalling). NX_SYNC_PIPELINES=1: compile in the replay, as before (bisecting, or pop-in that matters).
+    static const bool sync = std::getenv("NX_SYNC_PIPELINES") != nullptr;
+    auto collect = [&](PipelineJob& j) {
+        note_pipeline_created(j.ns);
+        if (j.made != VK_SUCCESS)
+            log("nvn/vk: pipeline for %s + %s failed", key.vs ? key.vs->hash.c_str() : "-", key.fs ? key.fs->hash.c_str() : "-");
+        else if (g_trace)
+            log("nvn/vk: pipeline %zu: %s + %s", cache.size() + 1, key.vs ? key.vs->hash.c_str() : "-", key.fs ? key.fs->hash.c_str() : "-");
+        return (last = &*cache.emplace(k, j.made == VK_SUCCESS ? j.result : VK_NULL_HANDLE).first)->second;
+    };
+    if (auto it = pending.find(k); it != pending.end()) {
+        if (!it->second->done.load(std::memory_order_acquire)) return VK_NULL_HANDLE;
+        auto j = std::move(it->second);
+        pending.erase(it);
+        return collect(*j);
+    }
 
-    VkPipelineShaderStageCreateInfo stages[2]{};
+    auto job = std::make_shared<PipelineJob>();
+    job->key = key;
+    job->cache = pipeline_cache();
+    auto& stages = job->stages;
     uint32_t nstages = 0;
     uint8_t int_kinds[16] = {};
     for (uint32_t a = 0; a < key.attrib_count && a < 16; a++) int_kinds[a] = uint8_t(vertex_int_kind(key.attribs[a].format));
@@ -292,8 +388,8 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
 
     // Vertex input: each shader input location reads the attribute of the same index. Locations with no attribute
     // (or an unknown format) read a zero vec4 from binding 15.
-    std::vector<VkVertexInputAttributeDescription> attrs;
-    std::vector<VkVertexInputBindingDescription> binds;
+    auto& attrs = job->attrs;
+    auto& binds = job->binds;
     bool streams_used[16] = {}, zero_used = false;
     if (key.vs)
         for (const ShaderIo& in : key.vs->refl.inputs) {
@@ -315,22 +411,22 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
             binds.push_back({s, vs.stride, vs.divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
         }
     if (zero_used) binds.push_back({15, 0, VK_VERTEX_INPUT_RATE_INSTANCE});
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    auto& vi = job->vi = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount = uint32_t(binds.size());
     vi.pVertexBindingDescriptions = binds.data();
     vi.vertexAttributeDescriptionCount = uint32_t(attrs.size());
     vi.pVertexAttributeDescriptions = attrs.data();
 
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    auto& ia = job->ia = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = vk_topology(key.topology);
 
-    VkPipelineViewportDepthClipControlCreateInfoEXT clip{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT};
+    auto& clip = job->clip = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT};
     clip.negativeOneToOne = VK_TRUE;  // NVN depth mode 0 (Wonder): clip-space z in -1..1
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    auto& vp = job->vp = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
     vp.viewportCount = vp.scissorCount = 1;
     if (vk_depth_clip_control() && !depth_remap()) vp.pNext = &clip;
 
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    auto& rs = job->rs = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rs.polygonMode = key.polygon.mode == 0 ? VK_POLYGON_MODE_POINT : key.polygon.mode == 1 ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
     rs.cullMode = vk_cull(key.polygon.cull);
     // NVNfrontFace CW 0 / CCW 1, taken as is: the draws use a negative-height viewport (nvn_draw.cpp) that gives NVN's
@@ -346,7 +442,7 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
     uint32_t offset_bit = key.polygon.mode <= 2 ? 1u << key.polygon.mode : 4u;
     rs.depthBiasEnable = key.polygon.offset_enables & offset_bit || equal_slack_pass(key.depth) ? VK_TRUE : VK_FALSE;
 
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    auto& ms = job->ms = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     // BindMultisampleState's alpha to coverage (G7; single-sampled targets: alpha under 0.5 drops the fragment),
     // logged once per pipeline that has it. NX_NO_ALPHA_TO_COVERAGE=1: off, as when it was a stub.
@@ -355,7 +451,7 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
     if (key.alpha_to_coverage)
         log("nvn/vk: alpha to coverage%s: fs %s", no_a2c ? " (off)" : "", key.fs ? key.fs->hash.c_str() : "-");
 
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    auto& ds = job->ds = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     bool has_depth = key.depth_format != VK_FORMAT_UNDEFINED;
     ds.depthTestEnable = has_depth && key.depth.depth_test;
     ds.depthWriteEnable = has_depth && key.depth.depth_write;
@@ -374,7 +470,7 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
         faces[f]->compareMask = faces[f]->writeMask = 0xFF;  // dynamic: SetStencilValueMask / SetStencilMask
     }
 
-    VkPipelineColorBlendAttachmentState att[8]{};
+    auto& att = job->att;
     for (uint32_t k = 0; k < key.color_count; k++) {
         const BlendTarget& b = key.blend[k];
         // An R11G11B10F target's destination alpha is 1 on Maxwell; the RGBA16F image holds what the shader wrote.
@@ -396,27 +492,25 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
         att[k].alphaBlendOp = vk_blend_op(b.eq_a);
         att[k].colorWriteMask = key.mask.mask[k] & 0xF;
     }
-    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    auto& cb = job->cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = key.color_count;
     cb.pAttachments = att;
 
     // Stencil reference and masks and depth bias values come from command-buffer calls (nvn_raster.cpp), so they are
     // dynamic: one pipeline for every value the game uses.
-    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-                            VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
-                            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_DEPTH_BIAS};
-    VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    auto& dyn = job->dyn;
+    auto& dy = job->dy = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dy.dynamicStateCount = uint32_t(sizeof dyn / sizeof dyn[0]);
     dy.pDynamicStates = dyn;
 
-    VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    auto& ri = job->ri = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     ri.colorAttachmentCount = key.color_count;
-    ri.pColorAttachmentFormats = key.color_formats;
+    ri.pColorAttachmentFormats = job->key.color_formats;  // the caller's key is gone once the worker runs
     bool stencil = key.depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT || key.depth_format == VK_FORMAT_S8_UINT;
     ri.depthAttachmentFormat = key.depth_format == VK_FORMAT_S8_UINT ? VK_FORMAT_UNDEFINED : key.depth_format;
     ri.stencilAttachmentFormat = stencil ? key.depth_format : VK_FORMAT_UNDEFINED;
 
-    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    auto& ci = job->ci = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     ci.pNext = &ri;
     if (render_pass_objects())  // nvn_renderpass.cpp: compatible with every pass of these formats
         ci.pNext = nullptr, ci.renderPass = compatible_render_pass(key.color_count, key.color_formats, key.depth_format);
@@ -431,15 +525,13 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
     ci.layout = layout.layout;
-    VkPipeline p = VK_NULL_HANDLE;
-    const uint64_t t0 = plat::monotonic_ns();
-    VkResult made = p_vkCreateGraphicsPipelines(vk_device(), pipeline_cache(), 1, &ci, nullptr, &p);
-    note_pipeline_created(plat::monotonic_ns() - t0);
-    if (made != VK_SUCCESS)
-        log("nvn/vk: pipeline for %s + %s failed", key.vs ? key.vs->hash.c_str() : "-", key.fs ? key.fs->hash.c_str() : "-");
-    else if (g_trace)
-        log("nvn/vk: pipeline %zu: %s + %s", cache.size() + 1, key.vs ? key.vs->hash.c_str() : "-", key.fs ? key.fs->hash.c_str() : "-");
-    return (last = &*cache.emplace(k, p).first)->second;
+    if (sync) {
+        job->build();
+        return collect(*job);
+    }
+    build_async(job);
+    pending.emplace(k, std::move(job));
+    return VK_NULL_HANDLE;
 }
 
 // ---- sampled textures -------------------------------------------------------------------------------------------------
