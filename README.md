@@ -81,9 +81,6 @@ The details are in the GitHub milestones.
 - **Character-select blur:** needs a reference from a real console.
 - **Android rendering bugs and performance:** hand-off notes in [docs/nvn/android-perf/](docs/nvn/android-perf/).
 - **Linux:** see [Platforms](#platforms).
-- **Toads' eyes:** Toad, Toadette and the other Toads show only one eye. Wrap modes, culling, texture uploads,
-  stencil, depth bias and the EQUAL depth tolerance (`NX_EQUAL_SLACK` 1 to 256: no change, or worse) are ruled out.
-  Suspect: the ~500 shaders whose sampler type the offline translator assumed was 2D.
 
 ### Mods
 
